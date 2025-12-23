@@ -18,18 +18,18 @@
         <position ctrllimited="true" ctrlrange="-2.618 2.618" joint="piper_left/joint1" kp="800"  user="1" forcelimited="true" forcerange="-150 150"/>
         <position ctrllimited="true" ctrlrange="0 3.14" joint="piper_left/joint2" kp="1600"  user="1" forcelimited="true" forcerange="-300 300"/>
         <position ctrllimited="true" ctrlrange="-2.967 0" joint="piper_left/joint3" kp="800"  user="1" forcelimited="true" forcerange="-100 100"/>
-        <position ctrllimited="true" ctrlrange="-1.745 1.745" joint="piper_left/joint4" kp="10"  user="1" forcelimited="true" forcerange="-100 100"/>
-        <position ctrllimited="true" ctrlrange="-1.22 1.22" joint="piper_left/joint5" kp="50"  user="1"/>
-        <position ctrllimited="true" ctrlrange="-2.0944 2.0944" joint="piper_left/joint6" kp="20"  user="1"/>
+        <position ctrllimited="true" ctrlrange="-1.745 1.745" joint="piper_left/joint4" kp="100"  user="1" forcelimited="true" forcerange="-100 100"/>
+        <position ctrllimited="true" ctrlrange="-1.22 1.22" joint="piper_left/joint5" kp="500"  user="1"/>
+        <position ctrllimited="true" ctrlrange="-2.0944 2.0944" joint="piper_left/joint6" kp="200"  user="1"/>
         <position ctrllimited="true" ctrlrange="0 0.035" joint="piper_left/joint7" kp="500"  user="1"/>
         <position ctrllimited="true" ctrlrange="-0.035 0" joint="piper_left/joint8" kp="500"  user="1"/>
 
         <position ctrllimited="true" ctrlrange="-2.618 2.618" joint="piper_right/joint1" kp="800"  user="1" forcelimited="true" forcerange="-150 150"/>
         <position ctrllimited="true" ctrlrange="0 3.14" joint="piper_right/joint2" kp="1600"  user="1" forcelimited="true" forcerange="-300 300"/>
         <position ctrllimited="true" ctrlrange="-2.967 0" joint="piper_right/joint3" kp="800"  user="1" forcelimited="true" forcerange="-100 100"/>
-        <position ctrllimited="true" ctrlrange="-1.745 1.745" joint="piper_right/joint4" kp="10"  user="1" forcelimited="true" forcerange="-100 100"/>
-        <position ctrllimited="true" ctrlrange="-1.22 1.22" joint="piper_right/joint5" kp="50"  user="1"/>
-        <position ctrllimited="true" ctrlrange="-2.0944 2.0944" joint="piper_right/joint6" kp="20"  user="1"/>
+        <position ctrllimited="true" ctrlrange="-1.745 1.745" joint="piper_right/joint4" kp="100"  user="1" forcelimited="true" forcerange="-100 100"/>
+        <position ctrllimited="true" ctrlrange="-1.22 1.22" joint="piper_right/joint5" kp="500"  user="1"/>
+        <position ctrllimited="true" ctrlrange="-2.0944 2.0944" joint="piper_right/joint6" kp="200"  user="1"/>
         <position ctrllimited="true" ctrlrange="0 0.035" joint="piper_right/joint7" kp="500" user="1"/>
         <position ctrllimited="true" ctrlrange="-0.035 0" joint="piper_right/joint8" kp="500" user="1"/>
     </actuator>
