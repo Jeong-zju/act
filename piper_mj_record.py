@@ -679,13 +679,15 @@ if __name__ == "__main__":
             '/observations/images/top': [],
             '/action': [],
             '/reward': [],
+            '/timestamp': [],
         }
-        for ts in episode:
+        for time_step, ts in enumerate(episode):
             data_dict['/observations/qpos'].append(ts.observation['qpos'])
             data_dict['/observations/qvel'].append(ts.observation['qvel'])
             data_dict['/observations/images/top'].append(ts.observation['images']['top'])
             data_dict['/action'].append(ts.action)
             data_dict['/reward'].append(ts.reward)
+            data_dict['/timestamp'].append(time_step * 0.02)
 
         print("*" * 50)
         print(f"Total reward: {ts.reward}")
@@ -708,6 +710,7 @@ if __name__ == "__main__":
             qvel = obs.create_dataset('qvel', (max_timesteps, 14))
             action = root.create_dataset('action', (max_timesteps, 14))
             reward = root.create_dataset('reward', (max_timesteps,))
+            timestamp = root.create_dataset('timestamp', (max_timesteps,))
 
             for name, array in data_dict.items():
                 root[name][...] = array
@@ -716,5 +719,5 @@ if __name__ == "__main__":
 
         episode_idx += 1
 
-        if episode_idx > 200:
+        if episode_idx > 50:
             break

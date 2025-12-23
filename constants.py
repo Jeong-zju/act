@@ -40,7 +40,7 @@ SIM_TASK_CONFIGS = {
 
     'sim_transfer_cube_piper':{
         'dataset_dir': DATA_DIR + '/sim_transfer_cube_piper',
-        'num_episodes': 21,
+        'num_episodes': 50,
         'episode_len': 1200,
         'camera_names': ['top']
     },
