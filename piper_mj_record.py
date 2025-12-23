@@ -313,14 +313,14 @@ class CubeTransferPolicy(BasePolicy):
 
         zero_quat = np.array([0, 0, 0, 1])  # Identity quaternion for zero position
 
-        gripper_close = 0.0
+        gripper_close = 0.005
         gripper_open = 0.035
 
         # Left arm waypoints (7 steps as requested)
         self.left_trajectory = [
             {"t": 0, "xyz": np.array([0, 0, 0]), "quat": zero_quat, "gripper": 0.035},
-            {"t": 200, "xyz": box_xyz + np.array([0, 0, 0.195]), "quat": cube_reach_quat, "gripper": 0.035},
-            {"t": 250, "xyz": box_xyz + np.array([0, 0, 0.095]), "quat": cube_reach_quat, "gripper": 0.035},
+            {"t": 100, "xyz": box_xyz + np.array([0, 0, 0.195]), "quat": cube_reach_quat, "gripper": 0.035},
+            {"t": 200, "xyz": box_xyz + np.array([0, 0, 0.095]), "quat": cube_reach_quat, "gripper": 0.035},
             {"t": 300, "xyz": box_xyz + np.array([0, 0, 0.095]), "quat": cube_reach_quat, "gripper": gripper_close},
             {"t": 600, "xyz": meet_left_xyz + np.array([0, 0.05, 0]), "quat": meet_left_quat, "gripper": gripper_close},
             {"t": 700, "xyz": meet_left_xyz, "quat": meet_left_quat, "gripper": gripper_close},

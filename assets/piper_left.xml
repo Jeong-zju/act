@@ -1,0 +1,50 @@
+<mujocoinclude>
+    <body name="piper_left" pos="0 0 0">
+        <inertial pos="-0.00473641164191482 2.56829134630247E-05 0.041451518036016" quat="0 0 0 1" mass="1.02" diaginertia="0.00282612 0.00269117 0.00087939" />
+        <geom type="mesh" mesh="piper_base_link" name="piper_left/base_link" contype="0" conaffinity="0"/>
+        <body name="piper_left/link1" pos="0 0 0.123">
+            <inertial pos="0.000121504734057468 0.000104632162460536 -0.00438597309559853" quat="0 0 0 1" mass="0.71" diaginertia="0.00048926 0.00043989 0.00040455" />
+            <joint name="piper_left/joint1" pos="0 0 0" axis="0 0 1" limited="true" range="-2.618 2.618" frictionloss="50" />
+            <geom type="mesh" mesh="piper_link1" name="piper_left/1_link1" />
+            <body name="piper_left/link2" pos="0 0 0" quat="0.048008436658572406 -0.04801344301314855 -0.7054761009125181 -0.7054738622662738">
+                <inertial pos="0.198666145229743 -0.010926924140076 0.00142121714502687" quat="0 0 0 1" mass="1.17" diaginertia="0.06790323 0.06774502 0.00111966" />
+                <joint name="piper_left/joint2" pos="0 0 0" axis="0 0 1" limited="true" range="0 3.14" frictionloss="50" />
+                <geom type="mesh" mesh="piper_link2" name="piper_left/2_link2" />
+                <body name="piper_left/link3" pos="0.28503 0 0" quat="0.6239962203797329 0.0 0.0 -0.7814273587172437">
+                    <inertial pos="-0.0202737662122021 -0.133914995944595 -0.000458682652737356" quat="0 0 0 1" mass="0.5" diaginertia="0.01382268 0.01380321 0.00024469" />
+                    <joint name="piper_left/joint3" pos="0 0 0" axis="0 0 1" limited="true" range="-2.967 0" frictionloss="50" />
+                    <geom type="mesh" mesh="piper_link3" name="piper_left/3_link3" />
+                    <body name="piper_left/link4" pos="-0.021984 -0.25075 0" quat="0.7071054825112363 0.7071080798594735 0.0 0.0">
+                        <inertial pos="-9.66635791618542E-05 0.000876064475651083 -0.00496880904640868" quat="0 0 0 1" mass="0.38" diaginertia="0.00019159 0.00018505 0.00015286" />
+                        <joint name="piper_left/joint4" pos="0 0 0" axis="0 0 1" limited="true" range="-1.745 1.745" frictionloss="50" />
+                        <geom type="mesh" mesh="piper_link4" name="piper_left/4_link4" />
+                        <body name="piper_left/link5" pos="0 0 0" quat="0.7071054825112363 -0.7071080798594735 0.0 0.0">
+                            <inertial pos="-4.10554118924211E-05 -0.0566486692356075 -0.0037205791677906" quat="0 0 0 1" mass="0.383" diaginertia="0.00166169 0.00164328 0.00018503" />
+                            <joint name="piper_left/joint5" pos="0 0 0" axis="0 0 1" limited="true" range="-1.22 1.22" frictionloss="50" />
+                            <geom type="mesh" mesh="piper_link5" name="piper_left/5_link5" />
+                            <body name="piper_left/link6" pos="8.8259E-05 -0.091 0" quat="0.7071054825112363 0.7071080798594735 0.0 0.0">
+                                <inertial pos="-8.82590762930069E-05 9.0598378529832E-06 -0.002" quat="0 0 0 1" mass="0.007" diaginertia="1.06738869e-06 5.73015541e-07 5.73015541e-07" />
+                                <joint name="piper_left/joint6" pos="0 0 0" axis="0 0 1" limited="true" range="-2.0944 2.0944" frictionloss="50" />
+                                <geom type="mesh" mesh="piper_link6" name="piper_left/6_link6" />
+                                <body name="piper_left/gripper_base" pos="0 0 0">
+                                    <inertial pos="-0.000183807162235591 8.05033155577911E-05 0.0321436689908876" quat="0 0 0 1" mass="0.45" diaginertia="0.00092944 0.00071447 0.00039432" />
+                                    <geom type="mesh" mesh="piper_gripper_base" name="piper_left/gripper_base" />
+                                    <body name="piper_left/link7" pos="0 0 0.1358" quat="0.7071054825112363 0.7071080798594735 0.0 0.0">
+                                        <inertial pos="0.00065123185041968 -0.0491929869131989 0.00972258769184025" quat="0 0 0 1" mass="0.025" diaginertia="7.74531449e-05 7.36782567e-05 5.08859839e-06" />
+                                        <joint name="piper_left/joint7" pos="0 0 0" axis="0 0 1" type="slide" limited="true" range="0 0.035" frictionloss="5" />
+                                        <geom type="mesh" mesh="piper_link7" name="piper_left/7_link7" />
+                                    </body>
+                                    <body name="piper_left/link8" pos="0 0 0.1358" quat="-2.5973434669646147e-06 -2.597353007557415e-06 -0.7071080798547033 -0.707105482506466">
+                                        <inertial pos="0.000651231850419722 -0.0491929869131991 0.00972258769184024" quat="0 0 0 1" mass="0.025" diaginertia="7.74531449e-05 7.36782567e-05 5.08859839e-06" />
+                                        <joint name="piper_left/joint8" pos="0 0 0" axis="0 0 -1" type="slide" limited="true" range="-0.035 0" frictionloss="5" />
+                                        <geom type="mesh" mesh="piper_link8" name="piper_left/8_link8" />
+                                    </body>
+                                </body>
+                            </body>
+                        </body>
+                    </body>
+                </body>
+            </body>
+        </body>
+    </body>
+</mujocoinclude>

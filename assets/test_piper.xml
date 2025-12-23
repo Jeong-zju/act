@@ -1,0 +1,42 @@
+<mujoco>
+    <include file="scene_piper.xml"/>
+    <include file="vx300s_dependencies.xml"/>
+    <include file="piper_dependencies.xml"/>
+    <worldbody>
+        <include file="piper_left.xml"/>
+        <include file="piper_right.xml"/>
+        <!-- <include file="vx300s_left.xml" /> -->
+        <!-- <body name="box" pos="0.25 -0.28188 0.05"> -->
+        <body name="box" pos="0.2 0 0.05">
+            <joint name="red_box_joint" type="free" frictionloss="0.01" />
+            <inertial pos="0 0 0" mass="0.01" diaginertia="0.002 0.002 0.002" />
+            <geom condim="4" solimp="2 1 0.01" solref="0.01 1" friction="1 1 0.0001" pos="0 0 0" size="0.02 0.02 0.02" type="box" name="red_box" rgba="1 0 0 1" />
+        </body>
+    </worldbody>
+
+    <actuator>
+        <position ctrllimited="true" ctrlrange="-2.618 2.618" joint="piper_left/joint1" kp="800"  user="1" forcelimited="true" forcerange="-150 150"/>
+        <position ctrllimited="true" ctrlrange="0 3.14" joint="piper_left/joint2" kp="1600"  user="1" forcelimited="true" forcerange="-300 300"/>
+        <position ctrllimited="true" ctrlrange="-2.967 0" joint="piper_left/joint3" kp="800"  user="1" forcelimited="true" forcerange="-100 100"/>
+        <position ctrllimited="true" ctrlrange="-1.745 1.745" joint="piper_left/joint4" kp="10"  user="1" forcelimited="true" forcerange="-100 100"/>
+        <position ctrllimited="true" ctrlrange="-1.22 1.22" joint="piper_left/joint5" kp="50"  user="1"/>
+        <position ctrllimited="true" ctrlrange="-2.0944 2.0944" joint="piper_left/joint6" kp="20"  user="1"/>
+        <position ctrllimited="true" ctrlrange="0 0.035" joint="piper_left/joint7" kp="500"  user="1"/>
+        <position ctrllimited="true" ctrlrange="-0.035 0" joint="piper_left/joint8" kp="500"  user="1"/>
+
+        <position ctrllimited="true" ctrlrange="-2.618 2.618" joint="piper_right/joint1" kp="800"  user="1" forcelimited="true" forcerange="-150 150"/>
+        <position ctrllimited="true" ctrlrange="0 3.14" joint="piper_right/joint2" kp="1600"  user="1" forcelimited="true" forcerange="-300 300"/>
+        <position ctrllimited="true" ctrlrange="-2.967 0" joint="piper_right/joint3" kp="800"  user="1" forcelimited="true" forcerange="-100 100"/>
+        <position ctrllimited="true" ctrlrange="-1.745 1.745" joint="piper_right/joint4" kp="10"  user="1" forcelimited="true" forcerange="-100 100"/>
+        <position ctrllimited="true" ctrlrange="-1.22 1.22" joint="piper_right/joint5" kp="50"  user="1"/>
+        <position ctrllimited="true" ctrlrange="-2.0944 2.0944" joint="piper_right/joint6" kp="20"  user="1"/>
+        <position ctrllimited="true" ctrlrange="0 0.035" joint="piper_right/joint7" kp="500" user="1"/>
+        <position ctrllimited="true" ctrlrange="-0.035 0" joint="piper_right/joint8" kp="500" user="1"/>
+    </actuator>
+
+    <keyframe>
+        <!-- <key qpos="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0  0.25 -0.28188 0.05 1 0 0 0"/> -->
+        <key qpos="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0  0.2 0 0.05 1 0 0 0"/>
+    </keyframe>
+
+</mujoco>

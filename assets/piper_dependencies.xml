@@ -1,0 +1,27 @@
+<mujocoinclude>
+    <compiler angle="radian" inertiafromgeom="auto" inertiagrouprange="4 5"/>
+    <asset>
+        <!-- <mesh name="piper_base_link" file="meshes/base_link.STL" scale="0.001 0.001 0.001" />
+        <mesh name="piper_link1" file="meshes/link1.STL" scale="0.001 0.001 0.001" />
+        <mesh name="piper_link2" file="meshes/link2.STL" scale="0.001 0.001 0.001" />
+        <mesh name="piper_link3" file="meshes/link3.STL" scale="0.001 0.001 0.001" />
+        <mesh name="piper_link4" file="meshes/link4.STL" scale="0.001 0.001 0.001" />
+        <mesh name="piper_link5" file="meshes/link5.STL" scale="0.001 0.001 0.001" />
+        <mesh name="piper_link6" file="meshes/link6.STL" scale="0.001 0.001 0.001" />
+        <mesh name="piper_gripper_base" file="meshes/gripper_base.STL" scale="0.001 0.001 0.001" />
+        <mesh name="piper_link7" file="meshes/link7.STL" scale="0.001 0.001 0.001" />
+        <mesh name="piper_link8" file="meshes/link8.STL" scale="0.001 0.001 0.001" /> -->
+
+        <mesh name="piper_base_link" file="meshes/base_link.STL" scale="1.0 1.0 1.0" />
+        <mesh name="piper_link1" file="meshes/link1.STL" scale="1.0 1.0 1.0" />
+        <mesh name="piper_link2" file="meshes/link2.STL" scale="1.0 1.0 1.0" />
+        <mesh name="piper_link3" file="meshes/link3.STL" scale="1.0 1.0 1.0" />
+        <mesh name="piper_link4" file="meshes/link4.STL" scale="1.0 1.0 1.0" />
+        <mesh name="piper_link5" file="meshes/link5.STL" scale="1.0 1.0 1.0" />
+        <mesh name="piper_link6" file="meshes/link6.STL" scale="1.0 1.0 1.0" />
+        <mesh name="piper_gripper_base" file="meshes/gripper_base.STL" scale="1.0 1.0 1.0" />
+        <mesh name="piper_link7" file="meshes/link7.STL" scale="1.0 1.0 1.0" />
+        <mesh name="piper_link8" file="meshes/link8.STL" scale="1.0 1.0 1.0" />
+    </asset>
+
+</mujocoinclude>
