@@ -113,6 +113,10 @@ class BasePolicy:
             left_joints, left_gripper = self._get_interpolated_joints(t, left_joint_waypoints)
             right_joints, right_gripper = self._get_interpolated_joints(t, right_joint_waypoints)
 
+            # Also get interpolated Cartesian poses for compatibility
+            left_xyz, left_quat, _ = self._get_interpolated_pose(t, 'left')
+            right_xyz, right_quat, _ = self._get_interpolated_pose(t, 'right')
+
             # Add noise if requested
             if self.inject_noise:
                 scale = 0.01
@@ -120,6 +124,8 @@ class BasePolicy:
                 right_joints = np.array(right_joints) + np.random.uniform(-scale, scale, len(right_joints))
                 left_joints = left_joints.tolist()
                 right_joints = right_joints.tolist()
+                left_xyz = left_xyz + np.random.uniform(-scale, scale, left_xyz.shape)
+                right_xyz = right_xyz + np.random.uniform(-scale, scale, right_xyz.shape)
 
             # Store the complete state for this timestep
             self.precomputed_trajectory.append({
@@ -127,8 +133,10 @@ class BasePolicy:
                 'right_joints': right_joints,
                 'left_gripper': left_gripper,
                 'right_gripper': right_gripper,
-                'left_xyz': None,  # Not computed in joint-space interpolation
-                'right_xyz': None
+                'left_xyz': left_xyz,
+                'right_xyz': right_xyz,
+                'left_quat': left_quat,
+                'right_quat': right_quat
             })
 
         print(f"Precomputed joint-space trajectory with {len(self.precomputed_trajectory)} timesteps")
@@ -233,18 +241,32 @@ class BasePolicy:
         if self.step_count == 0:
             self.generate_trajectory()
 
-        # obtain left and right waypoints
-        if self.left_trajectory[0]['t'] == self.step_count:
-            self.curr_left_waypoint = self.left_trajectory.pop(0)
-        next_left_waypoint = self.left_trajectory[0]
+        # Use precomputed joint-space trajectory if available, otherwise fall back to Cartesian interpolation
+        if self.precomputed_trajectory is not None and self.step_count < len(self.precomputed_trajectory):
+            # Get precomputed joint positions and gripper values
+            step_data = self.get_precomputed_step(self.step_count)
 
-        if self.right_trajectory[0]['t'] == self.step_count:
-            self.curr_right_waypoint = self.right_trajectory.pop(0)
-        next_right_waypoint = self.right_trajectory[0]
+            # Return Cartesian poses from the joint-space interpolated trajectory
+            left_xyz = step_data['left_xyz']
+            right_xyz = step_data['right_xyz']
+            left_quat = step_data['left_quat']
+            right_quat = step_data['right_quat']
+            left_gripper = step_data['left_gripper']
+            right_gripper = step_data['right_gripper']
+        else:
+            # Fall back to Cartesian interpolation between waypoints
+            # obtain left and right waypoints
+            if self.left_trajectory[0]['t'] == self.step_count:
+                self.curr_left_waypoint = self.left_trajectory.pop(0)
+            next_left_waypoint = self.left_trajectory[0]
 
-        # interpolate between waypoints to obtain current pose and gripper command
-        left_xyz, left_quat, left_gripper = self.interpolate(self.curr_left_waypoint, next_left_waypoint, self.step_count)
-        right_xyz, right_quat, right_gripper = self.interpolate(self.curr_right_waypoint, next_right_waypoint, self.step_count)
+            if self.right_trajectory[0]['t'] == self.step_count:
+                self.curr_right_waypoint = self.right_trajectory.pop(0)
+            next_right_waypoint = self.right_trajectory[0]
+
+            # interpolate between waypoints to obtain current pose and gripper command
+            left_xyz, left_quat, left_gripper = self.interpolate(self.curr_left_waypoint, next_left_waypoint, self.step_count)
+            right_xyz, right_quat, right_gripper = self.interpolate(self.curr_right_waypoint, next_right_waypoint, self.step_count)
 
         # Inject noise
         if self.inject_noise:
@@ -368,29 +390,25 @@ class MuJoCoController:
             # Get initial joint positions (home position)
             self.left_qinit = [0.0] * 6  # Start from home position
             self.right_qinit = [0.0] * 6  # Start from home position
+        # else:
+        #     print("TracIKSolver not available - using mock trajectory")
+        #     # Create a mock trajectory for testing - also precompute Cartesian poses
+        #     self.policy.precomputed_trajectory = []
+        #     for i in range(1200):  # Same length as original
+        #         # Get Cartesian poses from the trajectory waypoints
+        #         left_xyz, left_quat, left_gripper = self.policy._get_interpolated_pose(i, 'left')
+        #         right_xyz, right_quat, right_gripper = self.policy._get_interpolated_pose(i, 'right')
 
-            # Precompute the joint trajectory using IK
-            # print("Precomputing joint trajectory using IK...")
-            # self.policy.precompute_joint_trajectory(
-            #     self, self,  # Mock robot objects (we'll override get_joint_positions)
-            #     self.ik_solver,
-            #     left_qinit=self.left_qinit,
-            #     right_qinit=self.right_qinit
-            # )
-            # print(f"Precomputed trajectory with {len(self.policy.precomputed_trajectory)} steps")
-        else:
-            print("TracIKSolver not available - using mock trajectory")
-            # Create a mock trajectory for testing
-            self.policy.precomputed_trajectory = []
-            for i in range(1200):  # Same length as original
-                self.policy.precomputed_trajectory.append({
-                    'left_joints': [0.0] * 6,
-                    'right_joints': [0.0] * 6,
-                    'left_gripper': 0.035,
-                    'right_gripper': 0.035,
-                    'left_xyz': None,
-                    'right_xyz': None
-                })
+        #         self.policy.precomputed_trajectory.append({
+        #             'left_joints': [0.0] * 6,
+        #             'right_joints': [0.0] * 6,
+        #             'left_gripper': left_gripper,
+        #             'right_gripper': right_gripper,
+        #             'left_xyz': left_xyz,
+        #             'right_xyz': right_xyz,
+        #             'left_quat': left_quat,
+        #             'right_quat': right_quat
+        #         })
 
     def get_joint_positions(self):
         """Mock method to provide joint positions for IK solver"""
@@ -400,8 +418,8 @@ class MuJoCoController:
         """Randomly set the cube position in the MuJoCo simulation"""
         # Random position within a reasonable workspace
         # Keep it near the center but with some variation
-        x = np.random.uniform(0.1, 0.3)  # X position: 0.1 to 0.3
-        y = np.random.uniform(-0.2, 0.2)  # Y position: -0.2 to 0.2
+        x = np.random.uniform(0.15, 0.25)  # X position: 0.1 to 0.3
+        y = np.random.uniform(-0.15, 0.15)  # Y position: -0.2 to 0.2
         z = 0.05  # Keep Z fixed at table height
 
         # Keep orientation as identity (no rotation)
@@ -504,8 +522,8 @@ class MuJoCoController:
         self.data.ctrl[:] = env_action
 
         # Debug output
-        if self.step_count % 200 == 0:  # Print every 200 steps
-            print(f"Step {self.step_count}: Applied control - Left joints: {left_joints[:3]}..., Gripper: {left_gripper_pos:.3f}")
+        # if self.step_count % 200 == 0:  # Print every 200 steps
+        #     print(f"Step {self.step_count}: Applied control - Left joints: {left_joints[:3]}..., Gripper: {left_gripper_pos:.3f}")
 
         self.step_count += 1
         return True
