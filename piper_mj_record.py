@@ -1,12 +1,23 @@
 import time
 import numpy as np
+import collections
 from scipy.spatial.transform import Rotation as R
+from types import SimpleNamespace
 
 # Import constants from sim_env.py
 import sys
 import os
 sys.path.append(os.path.dirname(__file__))
-from constants import PUPPET_GRIPPER_POSITION_UNNORMALIZE_FN
+from constants import PIPER_GRIPPER_POSITION_NORMALIZE_FN
+from constants import PIPER_GRIPPER_POSITION_UNNORMALIZE_FN
+from constants import PIPER_GRIPPER_VELOCITY_NORMALIZE_FN
+from constants import PIPER_GRIPPER_POSITION_OPEN
+from constants import PIPER_GRIPPER_POSITION_CLOSE
+from constants import XML_DIR
+
+import matplotlib.pyplot as plt
+import h5py
+render_cam_name = 'top'
 
 # Try to import MuJoCo and TracIKSolver (optional for testing)
 try:
@@ -30,23 +41,167 @@ class BasePolicy:
         self.step_count = 0
         self.left_trajectory = None
         self.right_trajectory = None
-        self.precomputed_trajectory = None
 
-    def generate_trajectory(self):
+    def generate_trajectory(self, ts_first):
         raise NotImplementedError
 
+    @staticmethod
+    def interpolate(curr_waypoint, next_waypoint, t):
+        t_frac = (t - curr_waypoint["t"]) / (next_waypoint["t"] - curr_waypoint["t"])
+        curr_xyz = curr_waypoint['xyz']
+        curr_quat = curr_waypoint['quat']
+        curr_grip = curr_waypoint['gripper']
+        next_xyz = next_waypoint['xyz']
+        next_quat = next_waypoint['quat']
+        next_grip = next_waypoint['gripper']
+        xyz = curr_xyz + (next_xyz - curr_xyz) * t_frac
+        quat = curr_quat + (next_quat - curr_quat) * t_frac
+        gripper = curr_grip + (next_grip - curr_grip) * t_frac
+        return xyz, quat, gripper
+
+    def __call__(self, ts):
+        # generate trajectory at first timestep, then open-loop execution
+        if self.step_count == 0:
+            self.generate_trajectory(ts)
+
+        # obtain left and right waypoints
+        if self.left_trajectory[0]['t'] == self.step_count:
+            self.curr_left_waypoint = self.left_trajectory.pop(0)
+        next_left_waypoint = self.left_trajectory[0]
+
+        if self.right_trajectory[0]['t'] == self.step_count:
+            self.curr_right_waypoint = self.right_trajectory.pop(0)
+        next_right_waypoint = self.right_trajectory[0]
+
+        # interpolate between waypoints to obtain current pose and gripper command
+        left_xyz, left_quat, left_gripper = self.interpolate(self.curr_left_waypoint, next_left_waypoint, self.step_count)
+        right_xyz, right_quat, right_gripper = self.interpolate(self.curr_right_waypoint, next_right_waypoint, self.step_count)
+
+        # Inject noise
+        if self.inject_noise:
+            scale = 0.01
+            left_xyz = left_xyz + np.random.uniform(-scale, scale, left_xyz.shape)
+            right_xyz = right_xyz + np.random.uniform(-scale, scale, right_xyz.shape)
+
+        action_left = np.concatenate([left_xyz, left_quat, [left_gripper]])
+        action_right = np.concatenate([right_xyz, right_quat, [right_gripper]])
+
+        self.step_count += 1
+        return np.concatenate([action_left, action_right])
+
+
+class PickAndTransferPolicyPiper(BasePolicy):
+    """Policy for piper robots using joint-space interpolation with IK solver"""
+    
+    def __init__(self, inject_noise=False, robot_model_path=None):
+        super().__init__(inject_noise)
+        self.precomputed_trajectory = None
+        
+        # Set up IK solvers if available
+        if TRACIK_AVAILABLE:
+            robot_model_path = robot_model_path or "/home/jeong/zeno/wholebody-teleop/act/assets/piper_description.urdf"
+            self.ik_solver = TracIKSolver(robot_model_path, "base_link", "gripper_base")
+        else:
+            self.ik_solver = None
+            print("Warning: TracIKSolver not available. PickAndTransferPolicyPiper requires IK solver.")
+
     def pose_to_matrix(self, xyz, quat):
-        """Convert position and quaternion to 4x4 transformation matrix"""
-        rotation = R.from_quat(quat)
+        """Convert position and quaternion to 4x4 transformation matrix
+        Handles both pyquaternion format [w, x, y, z] and scipy format [x, y, z, w]
+        """
+        quat = np.array(quat)
+        quat_scipy = np.array([quat[1], quat[2], quat[3], quat[0]])
+        rot_matrix = R.from_quat(quat_scipy).as_matrix()
         matrix = np.eye(4)
-        matrix[:3, :3] = rotation.as_matrix()
+        matrix[:3, :3] = rot_matrix
         matrix[:3, 3] = xyz
         return matrix
 
-    def precompute_joint_trajectory(self, left_robot, right_robot, ik_solver, left_qinit=None, right_qinit=None):
+    def generate_trajectory(self, ts_first):
+        """Generate Cartesian waypoint trajectory (same as PickAndTransferPolicy)"""
+        # init_mocap_pose_right = ts_first.observation['mocap_pose_right']
+        # init_mocap_pose_left = ts_first.observation['mocap_pose_left']
+
+        world2left_pos = np.array([0, 0, 0])
+        world2left_quat = np.array([1, 0, 0, 0])
+        self.world2left_mat = self.pose_to_matrix(world2left_pos, world2left_quat)
+
+        world2right_pos = np.array([0, -0.56376582, 0])
+        world2right_quat = np.array([1, 0, 0, 0])
+        self.world2right_mat = self.pose_to_matrix(world2right_pos, world2right_quat)
+
+        box_info = np.array(ts_first.observation['env_state'])
+        box_xyz = box_info[:3]
+        box_quat = box_info[3:]
+        # print(f"Generate trajectory for {box_xyz=}")
+
+        # Meeting points matching piper_mj_record.py
+        meet_xyz = np.array([0, -0.28188, 0.3])  # Center meeting point
+        meet_left_xyz = np.array([0, -0.28188, 0.3]) + np.array([0.0, 0.125, 0.0])  # Left meeting point
+        meet_right_xyz = np.array([0, -0.28188, 0.3]) + np.array([0.0, -0.125, 0.0])  # Right meeting point
+
+        # Define orientations matching piper_mj_record.py
+        # Left: euler (np.pi/2, 0, 0) -> quaternion [w, x, y, z] for pyquaternion
+        meeting_left_euler = (np.pi/2, 0, 0)
+        meet_left_quat_scipy = R.from_euler('xyz', meeting_left_euler).as_quat()  # [x, y, z, w]
+        meet_left_quat = np.array([meet_left_quat_scipy[3], meet_left_quat_scipy[0], meet_left_quat_scipy[1], meet_left_quat_scipy[2]])  # Convert to [w, x, y, z]
+
+        world2leftmeet_mat = self.pose_to_matrix(meet_left_xyz, meet_left_quat)
+        left2leftmeet_mat = np.linalg.inv(self.world2left_mat) @ world2leftmeet_mat
+        left2leftmeet_xyz = np.array([left2leftmeet_mat[0, 3], left2leftmeet_mat[1, 3], left2leftmeet_mat[2, 3]])
+        left2leftmeet_quat_scipy = R.from_matrix(left2leftmeet_mat[:3, :3]).as_quat()
+        left2leftmeet_quat = np.array([left2leftmeet_quat_scipy[3], left2leftmeet_quat_scipy[0], left2leftmeet_quat_scipy[1], left2leftmeet_quat_scipy[2]])  # Convert to [w, x, y, z]
+        
+        # Right: euler (0, np.pi/2, np.pi/2) -> quaternion [w, x, y, z] for pyquaternion
+        meeting_right_euler = (0, np.pi/2, np.pi/2)
+        meet_right_quat_scipy = R.from_euler('xyz', meeting_right_euler).as_quat()  # [x, y, z, w]
+        meet_right_quat = np.array([meet_right_quat_scipy[3], meet_right_quat_scipy[0], meet_right_quat_scipy[1], meet_right_quat_scipy[2]])  # Convert to [w, x, y, z]
+
+        world2rightmeet_mat = self.pose_to_matrix(meet_right_xyz, meet_right_quat)
+        right2rightmeet_mat = np.linalg.inv(self.world2right_mat) @ world2rightmeet_mat
+        right2rightmeet_xyz = np.array([right2rightmeet_mat[0, 3], right2rightmeet_mat[1, 3], right2rightmeet_mat[2, 3]])
+        right2rightmeet_quat_scipy = R.from_matrix(right2rightmeet_mat[:3, :3]).as_quat()
+        right2rightmeet_quat = np.array([right2rightmeet_quat_scipy[3], right2rightmeet_quat_scipy[0], right2rightmeet_quat_scipy[1], right2rightmeet_quat_scipy[2]])  # Convert to [w, x, y, z]
+
+        # Define orientations for cube reaching (matching piper_mj_record.py)
+        cube_reach_euler = (0, np.pi, 0)  # For left arm reaching to cube
+        cube_reach_quat_scipy = R.from_euler('xyz', cube_reach_euler).as_quat()  # [x, y, z, w]
+        cube_reach_quat = np.array([cube_reach_quat_scipy[3], cube_reach_quat_scipy[0], cube_reach_quat_scipy[1], cube_reach_quat_scipy[2]])  # Convert to [w, x, y, z]
+
+        gripper_close = 0.005
+        gripper_open = 0.035
+
+        # Left arm waypoints matching piper_mj_record.py exactly
+        self.left_trajectory = [
+            {"t": 0, "joint": [0, 0, 0, 0, 0, 0], "gripper": gripper_open},
+            {"t": 100, "xyz": box_xyz + np.array([0, 0, 0.195]), "quat": cube_reach_quat, "gripper": gripper_open},
+            {"t": 200, "xyz": box_xyz + np.array([0, 0, 0.095]), "quat": cube_reach_quat, "gripper": gripper_open},
+            {"t": 300, "xyz": box_xyz + np.array([0, 0, 0.095]), "quat": cube_reach_quat, "gripper": gripper_close},
+            {"t": 600, "xyz": left2leftmeet_xyz + np.array([0, 0.05, 0]), "quat": left2leftmeet_quat, "gripper": gripper_close},
+            {"t": 700, "xyz": left2leftmeet_xyz, "quat": left2leftmeet_quat, "gripper": gripper_close},
+            {"t": 800, "xyz": left2leftmeet_xyz, "quat": left2leftmeet_quat, "gripper": gripper_close},
+            {"t": 900, "xyz": left2leftmeet_xyz, "quat": left2leftmeet_quat, "gripper": gripper_open},
+            {"t": 1200, "joint": [0, 0, 0, 0, 0, 0], "gripper": gripper_open},
+        ]
+
+        # Right arm waypoints matching piper_mj_record.py exactly
+        self.right_trajectory = [
+            {"t": 0, "joint": [0, 0, 0, 0, 0, 0], "gripper": gripper_open},
+            {"t": 600, "xyz": right2rightmeet_xyz + np.array([0, -0.05, 0]), "quat": right2rightmeet_quat, "gripper": gripper_open},
+            {"t": 700, "xyz": right2rightmeet_xyz, "quat": right2rightmeet_quat, "gripper": gripper_open},
+            {"t": 800, "xyz": right2rightmeet_xyz, "quat": right2rightmeet_quat, "gripper": gripper_close},
+            {"t": 900, "xyz": right2rightmeet_xyz, "quat": right2rightmeet_quat, "gripper": gripper_close},
+            {"t": 1200, "joint": [0, 0, 0, 0, 0, 0], "gripper": gripper_close}
+        ]
+
+        self.precompute_joint_trajectory(ts_first)
+
+        # self.precompute_cart_trajectory(ts_first)
+
+    def precompute_joint_trajectory(self, ts_first):
         """Precompute the entire joint trajectory using joint-space interpolation"""
         if self.left_trajectory is None or self.right_trajectory is None:
-            self.generate_trajectory()
+            raise ValueError("Trajectory not generated. Call generate_trajectory first.")
 
         # Find the maximum timestep in the trajectory
         max_timestep = max(
@@ -57,53 +212,69 @@ class BasePolicy:
         # Initialize precomputed trajectory
         self.precomputed_trajectory = []
 
-        # Get initial joint positions for IK solvers
-        if left_qinit is None:
-            left_qinit = left_robot.get_joint_positions()
-        if right_qinit is None:
-            right_qinit = right_robot.get_joint_positions()
+        # Get initial joint positions from observation
+        qpos = ts_first.observation['qpos']
+        left_qinit = qpos[:6].tolist()  # First 6 joints for left arm
+        right_qinit = qpos[7:13].tolist()  # Joints 7-12 for right arm (skip gripper at index 6)
 
         # First, convert all waypoints to joint space
         left_joint_waypoints = []
         right_joint_waypoints = []
 
         for wp in self.left_trajectory:
+            if "joint" in wp:
+                left_joint_waypoints.append({
+                    't': wp['t'],
+                    'joints': wp['joint'],
+                    'gripper': wp['gripper']
+                })
+                continue
+
             # Convert Cartesian waypoint to joint position
             left_pose_matrix = self.pose_to_matrix(wp['xyz'], wp['quat'])
 
             try:
-                joint_pos = ik_solver.ik(left_pose_matrix, qinit=left_qinit)
+                joint_pos = self.ik_solver.ik(left_pose_matrix, qinit=left_qinit)
                 if joint_pos is None:
                     print(f"Left IK failed for waypoint at t={wp['t']}, using fallback")
-                    joint_pos = [0.0] * 6
-                left_qinit = joint_pos  # Update for next waypoint
+                    joint_pos = left_qinit.copy()  # Use previous position as fallback
+                else:
+                    left_qinit = joint_pos.tolist()  # Update for next waypoint
             except Exception as e:
                 print(f"Left IK failed for waypoint at t={wp['t']}: {e}")
-                joint_pos = [0.0] * 6
+                joint_pos = np.array(left_qinit)  # Use previous position as fallback
 
             left_joint_waypoints.append({
                 't': wp['t'],
-                'joints': joint_pos,
+                'joints': joint_pos.tolist() if isinstance(joint_pos, np.ndarray) else joint_pos,
                 'gripper': wp['gripper']
             })
 
         for wp in self.right_trajectory:
+            if "joint" in wp:
+                right_joint_waypoints.append({
+                    't': wp['t'],
+                    'joints': wp['joint'],
+                    'gripper': wp['gripper']
+                })
+                continue
             # Convert Cartesian waypoint to joint position
             right_pose_matrix = self.pose_to_matrix(wp['xyz'], wp['quat'])
 
             try:
-                joint_pos = ik_solver.ik(right_pose_matrix, qinit=right_qinit)
+                joint_pos = self.ik_solver.ik(right_pose_matrix, qinit=right_qinit)
                 if joint_pos is None:
                     print(f"Right IK failed for waypoint at t={wp['t']}, using fallback")
-                    joint_pos = [0.0] * 6
-                right_qinit = joint_pos  # Update for next waypoint
+                    joint_pos = right_qinit.copy()  # Use previous position as fallback
+                else:
+                    right_qinit = joint_pos.tolist()  # Update for next waypoint
             except Exception as e:
                 print(f"Right IK failed for waypoint at t={wp['t']}: {e}")
-                joint_pos = [0.0] * 6
+                joint_pos = np.array(right_qinit)  # Use previous position as fallback
 
             right_joint_waypoints.append({
                 't': wp['t'],
-                'joints': joint_pos,
+                'joints': joint_pos.tolist() if isinstance(joint_pos, np.ndarray) else joint_pos,
                 'gripper': wp['gripper']
             })
 
@@ -113,9 +284,26 @@ class BasePolicy:
             left_joints, left_gripper = self._get_interpolated_joints(t, left_joint_waypoints)
             right_joints, right_gripper = self._get_interpolated_joints(t, right_joint_waypoints)
 
-            # Also get interpolated Cartesian poses for compatibility
-            left_xyz, left_quat, _ = self._get_interpolated_pose(t, 'left')
-            right_xyz, right_quat, _ = self._get_interpolated_pose(t, 'right')
+            # Convert joint positions back to Cartesian using FK
+            try:
+                left_pose_matrix = self.ik_solver.fk(left_joints)
+                left_xyz = left_pose_matrix[:3, 3]
+                # scipy returns [x, y, z, w], convert to MuJoCo format [w, x, y, z]
+                left_quat_scipy = R.from_matrix(left_pose_matrix[:3, :3]).as_quat()
+                left_quat = np.array([left_quat_scipy[3], left_quat_scipy[0], left_quat_scipy[1], left_quat_scipy[2]])
+            except Exception as e:
+                # Fallback to Cartesian interpolation if FK fails
+                left_xyz, left_quat, _ = self._get_interpolated_pose(t, 'left')
+
+            try:
+                right_pose_matrix = self.ik_solver.fk(right_joints)
+                right_xyz = right_pose_matrix[:3, 3]
+                # scipy returns [x, y, z, w], convert to MuJoCo format [w, x, y, z]
+                right_quat_scipy = R.from_matrix(right_pose_matrix[:3, :3]).as_quat()
+                right_quat = np.array([right_quat_scipy[3], right_quat_scipy[0], right_quat_scipy[1], right_quat_scipy[2]])
+            except Exception as e:
+                # Fallback to Cartesian interpolation if FK fails
+                right_xyz, right_quat, _ = self._get_interpolated_pose(t, 'right')
 
             # Add noise if requested
             if self.inject_noise:
@@ -141,8 +329,20 @@ class BasePolicy:
 
         print(f"Precomputed joint-space trajectory with {len(self.precomputed_trajectory)} timesteps")
 
+    def precompute_cart_trajectory(self, ts_first):
+        max_timestep = max(
+            max(wp['t'] for wp in self.left_trajectory),
+            max(wp['t'] for wp in self.right_trajectory)
+        )
+        self.precomputed_trajectory = []
+        for t in range(max_timestep + 1):
+            left_xyz, left_quat, left_gripper = self._get_interpolated_pose(t, 'left')
+            right_xyz, right_quat, right_gripper = self._get_interpolated_pose(t, 'right')
+            self.precomputed_trajectory.append({'left_xyz': left_xyz, 'left_quat': left_quat, 'left_gripper': left_gripper, 'right_xyz': right_xyz, 'right_quat': right_quat, 'right_gripper': right_gripper})
+        print(f"Precomputed Cartesian trajectory with {len(self.precomputed_trajectory)} timesteps")
+
     def _get_interpolated_pose(self, t, arm):
-        """Get interpolated pose for a specific timestep and arm"""
+        """Get interpolated pose for a specific timestep and arm (Cartesian interpolation)"""
         trajectory = self.left_trajectory if arm == 'left' else self.right_trajectory
 
         # Find the appropriate waypoint interval
@@ -173,14 +373,23 @@ class BasePolicy:
         else:
             t_frac = (t - curr_waypoint["t"]) / (next_waypoint["t"] - curr_waypoint["t"])
             curr_xyz = curr_waypoint['xyz']
-            curr_quat = curr_waypoint['quat']
+            curr_quat = np.array(curr_waypoint['quat'])
             curr_grip = curr_waypoint['gripper']
             next_xyz = next_waypoint['xyz']
-            next_quat = next_waypoint['quat']
+            next_quat = np.array(next_waypoint['quat'])
             next_grip = next_waypoint['gripper']
+            
+            # Linear interpolation for position and gripper
             xyz = curr_xyz + (next_xyz - curr_xyz) * t_frac
-            quat = curr_quat + (next_quat - curr_quat) * t_frac
             gripper = curr_grip + (next_grip - curr_grip) * t_frac
+            curr_quat_scipy = np.array([curr_quat[1], curr_quat[2], curr_quat[3], curr_quat[0]])
+            next_quat_scipy = np.array([next_quat[1], next_quat[2], next_quat[3], next_quat[0]])
+            rotations = R.from_quat([curr_quat_scipy, next_quat_scipy])
+            slerp = Slerp([0, 1], rotations)
+            interp_rot = slerp(t_frac)
+            quat_scipy = interp_rot.as_quat()
+            quat = np.array([quat_scipy[3], quat_scipy[0], quat_scipy[1], quat_scipy[2]])
+            
             return xyz, quat, gripper
 
     def _get_interpolated_joints(self, t, joint_trajectory):
@@ -222,24 +431,21 @@ class BasePolicy:
             gripper = curr_grip + (next_grip - curr_grip) * t_frac
             return joints.tolist(), gripper
 
-    @staticmethod
-    def interpolate(curr_waypoint, next_waypoint, t):
-        t_frac = (t - curr_waypoint["t"]) / (next_waypoint["t"] - curr_waypoint["t"])
-        curr_xyz = curr_waypoint['xyz']
-        curr_quat = curr_waypoint['quat']
-        curr_grip = curr_waypoint['gripper']
-        next_xyz = next_waypoint['xyz']
-        next_quat = next_waypoint['quat']
-        next_grip = next_waypoint['gripper']
-        xyz = curr_xyz + (next_xyz - curr_xyz) * t_frac
-        quat = curr_quat + (next_quat - curr_quat) * t_frac
-        gripper = curr_grip + (next_grip - curr_grip) * t_frac
-        return xyz, quat, gripper
+    def get_precomputed_step(self, step):
+        """Get precomputed joint positions for a specific step"""
+        if self.precomputed_trajectory is None:
+            raise ValueError("Trajectory not precomputed. Call precompute_joint_trajectory() first.")
 
-    def __call__(self):
+        if step >= len(self.precomputed_trajectory):
+            # Return final position if step exceeds trajectory length
+            return self.precomputed_trajectory[-1]
+
+        return self.precomputed_trajectory[step]
+
+    def __call__(self, ts):
         # generate trajectory at first timestep, then open-loop execution
         if self.step_count == 0:
-            self.generate_trajectory()
+            self.generate_trajectory(ts)
 
         # Use precomputed joint-space trajectory if available, otherwise fall back to Cartesian interpolation
         if self.precomputed_trajectory is not None and self.step_count < len(self.precomputed_trajectory):
@@ -253,9 +459,10 @@ class BasePolicy:
             right_quat = step_data['right_quat']
             left_gripper = step_data['left_gripper']
             right_gripper = step_data['right_gripper']
+            left_joints = step_data['left_joints']
+            right_joints = step_data['right_joints']
         else:
             # Fall back to Cartesian interpolation between waypoints
-            # obtain left and right waypoints
             if self.left_trajectory[0]['t'] == self.step_count:
                 self.curr_left_waypoint = self.left_trajectory.pop(0)
             next_left_waypoint = self.left_trajectory[0]
@@ -269,360 +476,245 @@ class BasePolicy:
             right_xyz, right_quat, right_gripper = self.interpolate(self.curr_right_waypoint, next_right_waypoint, self.step_count)
 
         # Inject noise
-        if self.inject_noise:
-            scale = 0.01
-            left_xyz = left_xyz + np.random.uniform(-scale, scale, left_xyz.shape)
-            right_xyz = right_xyz + np.random.uniform(-scale, scale, right_xyz.shape)
+        # if self.inject_noise:
+        #     scale = 0.01
+        #     left_xyz = left_xyz + np.random.uniform(-scale, scale, left_xyz.shape)
+        #     right_xyz = right_xyz + np.random.uniform(-scale, scale, right_xyz.shape)
+
+        # action_left = np.concatenate([left_xyz, left_quat, [left_gripper]])
+        # action_right = np.concatenate([right_xyz, right_quat, [right_gripper]])
+        action_left = np.concatenate([left_joints, [left_gripper]])
+        action_right = np.concatenate([right_joints, [right_gripper]])
 
         self.step_count += 1
-        return left_xyz, left_quat, left_gripper, right_xyz, right_quat, right_gripper
-
-    def get_precomputed_step(self, step):
-        """Get precomputed joint positions for a specific step"""
-        if self.precomputed_trajectory is None:
-            raise ValueError("Trajectory not precomputed. Call precompute_joint_trajectory() first.")
-
-        if step >= len(self.precomputed_trajectory):
-            # Return final position if step exceeds trajectory length
-            return self.precomputed_trajectory[-1]
-
-        return self.precomputed_trajectory[step]
+        return np.concatenate([action_left, action_right])
 
 
-class CubeTransferPolicy(BasePolicy):
+class TransferCubeEETaskPiper():
+    def __init__(self, random=None):
+        self.max_reward = 4
 
-    def __init__(self, cube_pose_left_local, cube_pose_right_local, meeting_point=None, inject_noise=False):
-        super().__init__(inject_noise)
-        self.cube_pose_left_local = cube_pose_left_local  # Cube pose in left arm's local frame
-        self.cube_pose_right_local = cube_pose_right_local  # Cube pose in right arm's local frame
-        self.meeting_point = meeting_point  # Should be a tuple of (left_meeting_pose_local, right_meeting_pose_local)
-
-    def generate_trajectory(self):
-        # Extract positions and orientations from local cube poses
-        box_left_xyz = np.array(self.cube_pose_left_local[0])
-        box_left_quat = np.array(self.cube_pose_left_local[1])
-        box_right_xyz = np.array(self.cube_pose_right_local[0])
-        box_right_quat = np.array(self.cube_pose_right_local[1])
-
-        # For simplicity, use the left arm's view of the cube for left arm trajectory
-        # and right arm's view for right arm trajectory
-        box_xyz = box_left_xyz  # Use left arm's local frame for left arm trajectory
-
-        # Use provided meeting poses or fall back to defaults
-        if self.meeting_point is not None:
-            meeting_pose_left, meeting_pose_right = self.meeting_point
-            meet_left_xyz = np.array(meeting_pose_left[0])
-            meet_left_quat = np.array(meeting_pose_left[1])
-            meet_right_xyz = np.array(meeting_pose_right[0])
-            meet_right_quat = np.array(meeting_pose_right[1])
-        else:
-            # Fallback to hardcoded values if meeting point not provided
-            meet_xyz = np.array([0, -0.28188, 0.3])  # Center meeting point
-            meet_left_xyz = np.array([0, -0.28188, 0.3]) + np.array([0.0, 0.125, 0.0])  # Left meeting point
-            print(f"meet_left_xyz: {meet_left_xyz}")
-            meet_right_xyz = np.array([0, 0.28188, 0.3]) + np.array([0.0, -0.125, 0.0])  # Right meeting point
-            print(f"meet_right_xyz: {meet_right_xyz}")
-
-            # Define orientations
-            meeting_left_euler = (np.pi/2, 0, 0)  # meeting_pose_left_delta
-            meet_left_quat = R.from_euler('xyz', meeting_left_euler).as_quat()
-            meeting_right_euler = (0, np.pi/2, np.pi/2)  # meeting_pose_right_delta
-            meet_right_quat = R.from_euler('xyz', meeting_right_euler).as_quat()
-
-        # Define orientations for cube reaching
-        cube_reach_euler = (0, np.pi, 0)  # For left arm reaching to cube
-        cube_reach_quat = R.from_euler('xyz', cube_reach_euler).as_quat()
-
-        zero_quat = np.array([0, 0, 0, 1])  # Identity quaternion for zero position
-
-        gripper_close = 0.005
-        gripper_open = 0.035
-
-        # Left arm waypoints (7 steps as requested)
-        self.left_trajectory = [
-            {"t": 0, "xyz": np.array([0, 0, 0]), "quat": zero_quat, "gripper": 0.035},
-            {"t": 100, "xyz": box_xyz + np.array([0, 0, 0.195]), "quat": cube_reach_quat, "gripper": 0.035},
-            {"t": 200, "xyz": box_xyz + np.array([0, 0, 0.095]), "quat": cube_reach_quat, "gripper": 0.035},
-            {"t": 300, "xyz": box_xyz + np.array([0, 0, 0.095]), "quat": cube_reach_quat, "gripper": gripper_close},
-            {"t": 600, "xyz": meet_left_xyz + np.array([0, 0.05, 0]), "quat": meet_left_quat, "gripper": gripper_close},
-            {"t": 700, "xyz": meet_left_xyz, "quat": meet_left_quat, "gripper": gripper_close},
-            {"t": 800, "xyz": meet_left_xyz, "quat": meet_left_quat, "gripper": gripper_close},
-            {"t": 900, "xyz": meet_left_xyz, "quat": meet_left_quat, "gripper": 0.035},
-            {"t": 1200, "xyz": np.array([0, 0, 0]), "quat": zero_quat, "gripper": 0.035},
-        ]
-
-        # Right arm waypoints
-        self.right_trajectory = [
-            {"t": 0, "xyz": np.array([0, 0, 0]), "quat": zero_quat, "gripper": 0.035},
-            {"t": 600, "xyz": meet_right_xyz + np.array([0, -0.05, 0]), "quat": meet_right_quat, "gripper": 0.035},
-            {"t": 700, "xyz": meet_right_xyz, "quat": meet_right_quat, "gripper": 0.035},
-            {"t": 800, "xyz": meet_right_xyz, "quat": meet_right_quat, "gripper": gripper_close},
-            {"t": 900, "xyz": meet_right_xyz, "quat": meet_right_quat, "gripper": gripper_close},
-            {"t": 1200, "xyz": np.array([0, 0, 0]), "quat": zero_quat, "gripper": gripper_close}
-        ]
-
-
-class MuJoCoController:
-    """Controller class to manage MuJoCo simulation with the cube transfer policy"""
-
-    def __init__(self, model, data, policy=None, robot_model_path=None):
-        self.model = model
-        self.data = data
-        self.policy = policy
-        self.step_count = 0
-
-        # Find cube joint index
-        self.cube_joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "red_box_joint")
-
-        # Initialize policy if not provided
-        if self.policy is None:
-            # Policy will be created later after cube position is randomized
-            # For now, create a dummy policy that will be replaced
-            self.policy = None
-
-        # Set up IK solvers if available
-        if TRACIK_AVAILABLE:
-            robot_model_path = robot_model_path or "/home/jeong/zeno/wholebody-teleop/act/assets/piper_description.urdf"
-            # Create separate IK solvers for each arm since they're in the same MuJoCo model
-            # but have different kinematic chains
-            self.ik_solver = TracIKSolver(robot_model_path, "base_link", "gripper_base")
-
-            # Get initial joint positions (home position)
-            self.left_qinit = [0.0] * 6  # Start from home position
-            self.right_qinit = [0.0] * 6  # Start from home position
-        # else:
-        #     print("TracIKSolver not available - using mock trajectory")
-        #     # Create a mock trajectory for testing - also precompute Cartesian poses
-        #     self.policy.precomputed_trajectory = []
-        #     for i in range(1200):  # Same length as original
-        #         # Get Cartesian poses from the trajectory waypoints
-        #         left_xyz, left_quat, left_gripper = self.policy._get_interpolated_pose(i, 'left')
-        #         right_xyz, right_quat, right_gripper = self.policy._get_interpolated_pose(i, 'right')
-
-        #         self.policy.precomputed_trajectory.append({
-        #             'left_joints': [0.0] * 6,
-        #             'right_joints': [0.0] * 6,
-        #             'left_gripper': left_gripper,
-        #             'right_gripper': right_gripper,
-        #             'left_xyz': left_xyz,
-        #             'right_xyz': right_xyz,
-        #             'left_quat': left_quat,
-        #             'right_quat': right_quat
-        #         })
-
-    def get_joint_positions(self):
-        """Mock method to provide joint positions for IK solver"""
-        return [0.0] * 6  # Return home position
-
-    def randomize_cube_position(self):
-        """Randomly set the cube position in the MuJoCo simulation"""
-        # Random position within a reasonable workspace
-        # Keep it near the center but with some variation
-        x = np.random.uniform(0.15, 0.25)  # X position: 0.1 to 0.3
-        y = np.random.uniform(-0.15, 0.15)  # Y position: -0.2 to 0.2
-        z = 0.05  # Keep Z fixed at table height
-
-        # Keep orientation as identity (no rotation)
-        orientation = np.array([1, 0, 0, 0])  # Identity quaternion
-
-        # Set cube position and orientation in qpos
-        self.data.qpos[self.cube_joint_id:self.cube_joint_id+3] = [x, y, z]
-        self.data.qpos[self.cube_joint_id+3:self.cube_joint_id+7] = orientation
-
-        print(f"Randomized cube position to: [{x:.3f}, {y:.3f}, {z:.3f}]")
-
-    def recreate_policy_with_current_cube_position(self):
-        """Recreate the policy using the current cube position in MuJoCo"""
-        # Get current cube pose from MuJoCo data
-        cube_position_world = self.data.qpos[self.cube_joint_id:self.cube_joint_id+3]
-        cube_orientation_world = self.data.qpos[self.cube_joint_id+3:self.cube_joint_id+7]
-
-        # Transform cube pose to each arm's local coordinate frame
-        left_base_pos = np.array([0, 0, 0])
-        left_base_ori = np.array([0, 0, 0, 1])  # Identity quaternion
-
-        right_base_pos = np.array([-0.00860732, -0.56376582, 0.00961532])
-        right_base_ori = np.array([0.99967745, -0.01113996, 0.0132907, 0.01855407])
-
-        cube_pose_left_local = self._transform_pose_to_local(cube_position_world, cube_orientation_world,
-                                                           left_base_pos, left_base_ori)
-        cube_pose_right_local = self._transform_pose_to_local(cube_position_world, cube_orientation_world,
-                                                            right_base_pos, right_base_ori)
-
-        self.policy = CubeTransferPolicy(cube_pose_left_local, cube_pose_right_local)
-
-        # Re-precompute trajectory if IK is available
-        if TRACIK_AVAILABLE and hasattr(self, 'ik_solver'):
-            print("Precomputing joint trajectory for first episode...")
-            self.policy.precompute_joint_trajectory(
-                self, self,
-                self.ik_solver,
-                left_qinit=self.left_qinit,
-                right_qinit=self.right_qinit
-            )
-
-    def _transform_pose_to_local(self, world_pos, world_ori, base_pos, base_ori):
-        """Transform a pose from world coordinates to local robot base coordinates"""
-        # Convert quaternions to rotation matrices
-        world_rot = R.from_quat(world_ori)
-        base_rot = R.from_quat(base_ori)
-
-        # Transform: local_pose = inverse(base_pose) * world_pose
-        # First, transform position: local_pos = base_rot^T * (world_pos - base_pos)
-        local_pos = base_rot.inv().apply(world_pos - base_pos)
-
-        # Then, transform orientation: local_ori = base_rot^T * world_rot
-        local_rot = base_rot.inv() * world_rot
-        local_ori = local_rot.as_quat()
-
-        return (local_pos, local_ori)
-
-    def step_policy(self):
-        """Execute one step of the policy and apply to MuJoCo"""
-        # Check if policy exists and has a precomputed trajectory
-        if self.policy is None or self.policy.precomputed_trajectory is None or self.step_count >= len(self.policy.precomputed_trajectory):
-            return False
-
-        # Get precomputed joint positions
-        step_data = self.policy.get_precomputed_step(self.step_count)
-
-        # Extract joint positions and gripper values
-        left_joints = step_data['left_joints']
-        right_joints = step_data['right_joints']
-        left_gripper_pos = step_data['left_gripper']
-        right_gripper_pos = step_data['right_gripper']
-
-        # Normalize gripper positions for MuJoCo control
-        # MuJoCo gripper range based on actuator limits: joint7 [0, 0.035], joint8 [-0.035, 0]
-        left_gripper_normalized = (left_gripper_pos - 0.0) / (0.035 - 0.0)  # Normalize to [0, 1]
-        right_gripper_normalized = (right_gripper_pos - 0.0) / (0.035 - 0.0)
-
-        # Clamp to valid range
-        left_gripper_normalized = np.clip(left_gripper_normalized, 0.0, 1.0)
-        right_gripper_normalized = np.clip(right_gripper_normalized, 0.0, 1.0)
-
-        # Convert to actual gripper positions for MuJoCo
-        left_gripper_action = left_gripper_normalized * 0.035  # joint7: [0, 0.035]
-        right_gripper_action = right_gripper_normalized * 0.035  # joint7: [0, 0.035]
-
-        # Create full action array for MuJoCo (matching the actuator order in test_piper.xml)
+    def initialize_robots(self, data):
+        """Initialize piper robots to home position"""
+        # Reset joint positions to home (all zeros for piper)
+        # Piper has 16 joints total: 8 per arm (6 arm joints + 2 gripper joints)
+        data.qpos[:16] = [0.0] * 16
+        
+        # Reset gripper control to open position (piper gripper values)
+        # Piper gripper: joint7 [0, 0.035], joint8 [-0.035, 0]
         # Order: left joints (1-6), left gripper (7,8), right joints (1-6), right gripper (7,8)
-        env_action = np.array([
-            # Left arm joints
-            left_joints[0], left_joints[1], left_joints[2], left_joints[3], left_joints[4], left_joints[5],
-            # Left gripper
-            left_gripper_action, -left_gripper_action,  # joint7, joint8 (mirrored)
+        open_gripper_control = np.array([
+            # Left arm joints (already set via qpos, but actuators need control values)
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0,  # Left joints 1-6
+            PIPER_GRIPPER_POSITION_OPEN, -PIPER_GRIPPER_POSITION_OPEN,  # Left gripper joint7, joint8
             # Right arm joints
-            right_joints[0], right_joints[1], right_joints[2], right_joints[3], right_joints[4], right_joints[5],
-            # Right gripper
-            right_gripper_action, -right_gripper_action  # joint7, joint8 (mirrored)
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0,  # Right joints 1-6
+            PIPER_GRIPPER_POSITION_OPEN, -PIPER_GRIPPER_POSITION_OPEN,  # Right gripper joint7, joint8
         ])
+        np.copyto(data.ctrl, open_gripper_control)
 
-        # Apply action to MuJoCo
-        self.data.ctrl[:] = env_action
+    @staticmethod
+    def get_qpos(data):
+        qpos_raw = data.qpos.copy()
+        left_qpos_raw = qpos_raw[:8]
+        right_qpos_raw = qpos_raw[8:16]
+        left_arm_qpos = left_qpos_raw[:6]
+        right_arm_qpos = right_qpos_raw[:6]
+        # For piper, joint7 is the gripper position [0, 0.035], joint8 is the mirror [-0.035, 0]
+        # Normalize joint7 only (index 6) for gripper position
+        left_gripper_qpos = [PIPER_GRIPPER_POSITION_NORMALIZE_FN(left_qpos_raw[6])]
+        right_gripper_qpos = [PIPER_GRIPPER_POSITION_NORMALIZE_FN(right_qpos_raw[6])]
+        return np.concatenate([left_arm_qpos, left_gripper_qpos, right_arm_qpos, right_gripper_qpos])
 
-        # Debug output
-        # if self.step_count % 200 == 0:  # Print every 200 steps
-        #     print(f"Step {self.step_count}: Applied control - Left joints: {left_joints[:3]}..., Gripper: {left_gripper_pos:.3f}")
+    @staticmethod
+    def get_qvel(data):
+        qvel_raw = data.qvel.copy()
+        left_qvel_raw = qvel_raw[:8]
+        right_qvel_raw = qvel_raw[8:16]
+        left_arm_qvel = left_qvel_raw[:6]
+        right_arm_qvel = right_qvel_raw[:6]
+        # For piper, normalize joint7 velocity (index 6) for gripper velocity
+        left_gripper_qvel = [PIPER_GRIPPER_VELOCITY_NORMALIZE_FN(left_qvel_raw[6])]
+        right_gripper_qvel = [PIPER_GRIPPER_VELOCITY_NORMALIZE_FN(right_qvel_raw[6])]
+        return np.concatenate([left_arm_qvel, left_gripper_qvel, right_arm_qvel, right_gripper_qvel])
 
-        self.step_count += 1
-        return True
+    @staticmethod
+    def get_env_state(data):
+        env_state = data.qpos.copy()[16:]
+        return env_state
 
-    def check_cube_grasped(self):
-        """Check if the cube is currently grasped by the left gripper (successful transfer)"""
-        # Get all contact pairs
+    def get_observation(self, data, renderer=None):
+        # note: it is important to do .copy()
+        obs = collections.OrderedDict()
+        obs['qpos'] = self.get_qpos(data)
+        obs['qvel'] = self.get_qvel(data)
+        obs['env_state'] = self.get_env_state(data)
+        obs['images'] = dict()
+        # obs['images']['top'] = physics.render(height=480, width=640, camera_id='top')
+        if renderer is not None:
+            renderer.update_scene(data, camera="top")
+            obs['images']['top'] = renderer.render()
+        else:
+            obs['images']['top'] = np.random.randint(0, 255, (480, 640, 3))
+
+        return obs
+
+    def get_reward(self, model, data):
+        # return whether grippers are holding the box (piper-specific contact checking)
         all_contact_pairs = []
-        for i_contact in range(self.data.ncon):
-            id_geom_1 = self.data.contact[i_contact].geom1
-            id_geom_2 = self.data.contact[i_contact].geom2
-            name_geom_1 = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_GEOM, id_geom_1)
-            name_geom_2 = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_GEOM, id_geom_2)
+        for i_contact in range(data.ncon):
+            id_geom_1 = data.contact[i_contact].geom1
+            id_geom_2 = data.contact[i_contact].geom2
+            name_geom_1 = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, id_geom_1)
+            name_geom_2 = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, id_geom_2)
             contact_pair = (name_geom_1, name_geom_2)
             all_contact_pairs.append(contact_pair)
 
-        # Check contacts based on sim_env.py logic
-        # touch_left_gripper = ("red_box", "vx300s_left/10_left_gripper_finger") in all_contact_pairs
-        # touch_right_gripper = ("red_box", "vx300s_right/10_right_gripper_finger") in all_contact_pairs
-        # For piper robots, check contact with either gripper finger
-        touch_left_gripper = ("red_box", "piper_left/7_link7") in all_contact_pairs or ("red_box", "piper_left/8_link8") in all_contact_pairs
-        touch_right_gripper = ("red_box", "piper_right/7_link7") in all_contact_pairs or ("red_box", "piper_right/8_link8") in all_contact_pairs
+        # For piper robots, check contact with either gripper finger (link7 or link8)
+        touch_left_gripper = ("red_box", "piper_left/7_link7") in all_contact_pairs or \
+                            ("red_box", "piper_left/8_link8") in all_contact_pairs
+        touch_right_gripper = ("red_box", "piper_right/7_link7") in all_contact_pairs or \
+                             ("red_box", "piper_right/8_link8") in all_contact_pairs
         touch_table = ("red_box", "table") in all_contact_pairs
 
-        # Return True if cube is grasped by left gripper and not touching table (successful transfer)
-        return touch_right_gripper and not touch_table
+        reward = 0
+        if touch_left_gripper:
+            reward = 1
+        if touch_left_gripper and not touch_table: # lifted
+            reward = 2
+        if touch_right_gripper: # attempted transfer
+            reward = 3
+        if touch_right_gripper and not touch_table: # successful transfer
+            reward = 4
+        return reward
 
+
+
+class PiperEnvironment():
+    def __init__(self, task, model, data):
+        self.model = model
+        self.data = data
+        self.task: TransferCubeEETaskPiper = task
+        self.viewer = mujoco.viewer.launch_passive(self.model, self.data)
+        self.renderer = mujoco.Renderer(model, height=480, width=640)
+
+    def reset(self):
+        mujoco.mj_resetDataKeyframe(self.model, self.data, 0)
+
+        cube_position_x_lim = [0.15, 0.35]
+        cube_position_y_lim = [-0.1, 0.1]
+        cube_position_x = np.random.uniform(cube_position_x_lim[0], cube_position_x_lim[1])
+        cube_position_y = np.random.uniform(cube_position_y_lim[0], cube_position_y_lim[1])
+        cube_position = np.array([cube_position_x, cube_position_y, 0.05])
+        box_start_idx = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, "red_box_joint")
+        np.copyto(self.data.qpos[box_start_idx : box_start_idx + 3], cube_position)
+        mujoco.mj_step(self.model, self.data)
+        self.viewer.sync()
+        observation = self.task.get_observation(self.data)
+
+        ts = SimpleNamespace(observation=observation, reward=0, action=np.zeros(14))
+        return ts
+    
+    def step(self, action):
+        """Step the environment with given action"""
+        a_len = len(action) // 2
+        action_left = action[:a_len]
+        action_right = action[a_len:]
+        env_action = np.array([
+            # Left arm joints
+            action_left[0], action_left[1], action_left[2], action_left[3], action_left[4], action_left[5],
+            # Left gripper
+            action_left[6], -action_left[6],  # joint7, joint8 (mirrored)
+            # Right arm joints
+            action_right[0], action_right[1], action_right[2], action_right[3], action_right[4], action_right[5],
+            # Right gripper
+            action_right[6], -action_right[6]  # joint7, joint8 (mirrored)
+        ])
+        # env_action = np.array([ 1, 0, 0, 0, 0, 0, 0, 0,
+        #                         1, 0, 0, 0, 0, 0, 0, 0])
+        self.data.ctrl[:] = env_action
+        mujoco.mj_step(self.model, self.data)
+        self.viewer.sync()
+        observation = self.task.get_observation(self.data, renderer=self.renderer)
+        reward = self.task.get_reward(self.model, self.data)
+        ts = SimpleNamespace(observation=observation, reward=reward, action=action)
+        return ts
 
 if __name__ == "__main__":
-    if not MUJOCO_AVAILABLE:
-        print("MuJoCo not available - testing policy only")
-        # Test policy without MuJoCo
-        cube_pose = ([0.2, 0, 0.05], [0, 0, 0, 1])
-        policy = CubeTransferPolicy(cube_pose, cube_pose)
-        policy.generate_trajectory()
-        print(f"Generated trajectory with {len(policy.left_trajectory)} waypoints")
-        print("Policy test completed successfully!")
-    else:
-        # Initialize MuJoCo model and data
-        model = mujoco.MjModel.from_xml_path("assets/test_piper.xml")
-        data = mujoco.MjData(model)
 
-        print(f"Model loaded with {model.nq} DOF and {model.nu} actuators")
-        print(f"Joint names: {[model.joint(i).name for i in range(model.njnt)]}")
-        print(f"Actuator names: {[model.actuator(i).name for i in range(model.nu)]}")
+    model = mujoco.MjModel.from_xml_path(os.path.join(XML_DIR, f'test_piper.xml'))
+    data = mujoco.MjData(model)
 
-        # Initialize controller with policy
-        controller = MuJoCoController(model, data)
+    task = TransferCubeEETaskPiper()
+    env = PiperEnvironment(task, model, data)
 
-        # Test control array size
-        print(f"Control array size: {len(data.ctrl)} (expected: {model.nu})")
-        if len(data.ctrl) != model.nu:
-            print("ERROR: Control array size mismatch!")
-            exit(1)
+    # for _ in range(10):
+    #     ts = env.reset()
+    #     input("Press Enter to continue...")
 
-        # Reset to initial keyframe pose
-        mujoco.mj_resetDataKeyframe(model, data, 0)
-        print("Reset to initial keyframe pose")
+    # ts = env.reset()
+    
+    # ax = plt.subplot()
+    # plt_img = ax.imshow(ts.observation['images'][render_cam_name])
+    # plt.ion()
 
-        # Randomize cube position and recreate policy for first episode
-        controller.randomize_cube_position()
-        controller.recreate_policy_with_current_cube_position()
+    episode_idx = 0
+    while True:
+        print("=" * 100)
+        print(f"Episode {episode_idx}")
+        print("=" * 100)
+        ts = env.reset()
+        policy = PickAndTransferPolicyPiper(inject_noise=False)
+        episode = [ts]
+        for _ in range(1200-1):
+            action = policy(ts)
+            ts = env.step(action)
+            episode.append(ts)
+            # plt_img.set_data(ts.observation['images'][render_cam_name])
+            # # plt.pause(0.002)
 
-        # Run simulation with policy control
-        with mujoco.viewer.launch_passive(model, data) as viewer:
-            while viewer.is_running():
-                step_start = time.time()
+        data_dict = {
+            '/observations/qpos': [],
+            '/observations/qvel': [],
+            '/observations/images/top': [],
+            '/action': [],
+            '/reward': [],
+        }
+        for ts in episode:
+            data_dict['/observations/qpos'].append(ts.observation['qpos'])
+            data_dict['/observations/qvel'].append(ts.observation['qvel'])
+            data_dict['/observations/images/top'].append(ts.observation['images']['top'])
+            data_dict['/action'].append(ts.action)
+            data_dict['/reward'].append(ts.reward)
 
-                # Apply policy control
-                if not controller.step_policy():
-                    # Policy finished, check if cube was grasped
-                    cube_grasped = controller.check_cube_grasped()
+        print("*" * 50)
+        print(f"Total reward: {ts.reward}")
 
-                    if not cube_grasped:
-                        print("Episode finished. Cube not grasped")
-                        break
-                    
-                    # Policy finished, reset
-                    controller.step_count = 0
-                    mujoco.mj_resetDataKeyframe(model, data, 0)
-                    # Randomize cube position for next episode
-                    controller.randomize_cube_position()
-                    # Recreate policy with new cube position
-                    controller.recreate_policy_with_current_cube_position()
-                    print("Reset to initial pose with randomized cube position")
+        if ts.reward < 4:
+            print(f"Episode {episode_idx} failed. Reward: {ts.reward}")
+            continue
 
-                # Step physics
-                mujoco.mj_step(model, data)
+        max_timesteps = len(episode)
+        dataset_dir = "/home/jeong/zeno/wholebody-teleop/act/dataset/sim_transfer_cube_piper"
+        os.makedirs(dataset_dir, exist_ok=True)
+        dataset_path = os.path.join(dataset_dir, f'episode_{episode_idx}')
+        print(f"Saving episode {episode_idx} to {dataset_path}, {max_timesteps} timesteps...")
+        with h5py.File(dataset_path + '.hdf5', 'w', rdcc_nbytes=1024 ** 2 * 2) as root:
+            root.attrs['sim'] = True
+            obs = root.create_group('observations')
+            image = obs.create_group('images')
+            image.create_dataset('top', (max_timesteps, 480, 640, 3), dtype='uint8', chunks=(1, 480, 640, 3))
+            qpos = obs.create_dataset('qpos', (max_timesteps, 14))
+            qvel = obs.create_dataset('qvel', (max_timesteps, 14))
+            action = root.create_dataset('action', (max_timesteps, 14))
+            reward = root.create_dataset('reward', (max_timesteps,))
 
-                # Optional: modify visualization options
-                # with viewer.lock():
-                #     viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_CONTACTPOINT] = 1
+            for name, array in data_dict.items():
+                root[name][...] = array
 
-                # Sync and render
-                viewer.sync()
+        print("*" * 50)
 
-                # Sleep to maintain 60 FPS (fixed time step)
-                target_frame_time = 1.0 / 60.0  # 60 FPS
-                elapsed_time = time.time() - step_start
-                sleep_time = target_frame_time - elapsed_time
-                if sleep_time > 0:
-                    time.sleep(sleep_time)
+        episode_idx += 1
+
+        if episode_idx > 200:
+            break
