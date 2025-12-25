@@ -212,17 +212,29 @@ class MobileDualPiperTaskPiper():
         qpos_raw = data.qpos.copy()
         base_qpos = qpos_raw[:3]
         base_qpos[2] = (base_qpos[2] + np.pi) % (2 * np.pi) - np.pi
-        return np.concatenate([base_qpos, qpos_raw[3:]])
+        left_arm_qpos = qpos_raw[3:9]
+        right_arm_qpos = qpos_raw[10:16]
+        left_gripper_qpos = [PIPER_GRIPPER_POSITION_NORMALIZE_FN(qpos_raw[6])]
+        right_gripper_qpos = [PIPER_GRIPPER_POSITION_NORMALIZE_FN(qpos_raw[13])]
+        return np.concatenate([base_qpos, left_arm_qpos, left_gripper_qpos, right_arm_qpos, right_gripper_qpos])
 
     @staticmethod
     def get_qvel(data):
         qvel_raw = data.qvel.copy()
-        return qvel_raw
+        left_arm_qvel = qvel_raw[3:9]
+        right_arm_qvel = qvel_raw[10:16]
+        left_gripper_qvel = [PIPER_GRIPPER_VELOCITY_NORMALIZE_FN(qvel_raw[6])]
+        right_gripper_qvel = [PIPER_GRIPPER_VELOCITY_NORMALIZE_FN(qvel_raw[13])]
+        return np.concatenate([left_arm_qvel, left_gripper_qvel, right_arm_qvel, right_gripper_qvel])
 
     @staticmethod
     def get_qtor(data):
         qtor_raw = data.actuator_force.copy()
-        return qtor_raw
+        left_arm_qtor = qtor_raw[3:9]
+        right_arm_qtor = qtor_raw[10:16]
+        left_gripper_qtor = qtor_raw[6]
+        right_gripper_qtor = qtor_raw[13]
+        return np.concatenate([left_arm_qtor, left_gripper_qtor, right_arm_qtor, right_gripper_qtor])
 
     def get_observation(self, data, renderer=None):
         obs = collections.OrderedDict()

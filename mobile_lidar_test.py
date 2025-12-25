@@ -44,6 +44,7 @@ while env.viewer.is_running():
     print(f"Time: {t:.3f}s")
     print(ts.observation["qpos"][:3])
     print(ts.observation["qvel"][:3])
+    print(ts.observation["qpos"].shape)
     time.sleep(DT)
     t += DT
 
