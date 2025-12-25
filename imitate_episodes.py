@@ -178,6 +178,12 @@ def eval_bc(config, ckpt_name, save_episode=True):
         stats = pickle.load(f)
 
     pre_process = lambda s_qpos: (s_qpos - stats['qpos_mean']) / stats['qpos_std']
+    # Use qtor-specific normalization if available, otherwise fallback to qpos normalization
+    if 'qtor_mean' in stats and 'qtor_std' in stats:
+        pre_process_qtor = lambda s_qtor: (s_qtor - stats['qtor_mean']) / stats['qtor_std']
+    else:
+        # Fallback: if no qtor stats, use zeros (will be normalized to zeros anyway)
+        pre_process_qtor = lambda s_qtor: np.zeros_like(s_qtor)
     post_process = lambda a: a * stats['action_std'] + stats['action_mean']
 
     # load environment
@@ -244,12 +250,19 @@ def eval_bc(config, ckpt_name, save_episode=True):
                 qpos = pre_process(qpos_numpy)
                 qpos = torch.from_numpy(qpos).float().cuda().unsqueeze(0)
                 qpos_history[:, t] = qpos
+                # get qtor if available, otherwise use zeros
+                if 'qtor' in obs:
+                    qtor_numpy = np.array(obs['qtor'])
+                else:
+                    qtor_numpy = np.zeros_like(qpos_numpy)
+                qtor = pre_process_qtor(qtor_numpy)
+                qtor = torch.from_numpy(qtor).float().cuda().unsqueeze(0)
                 curr_image = get_image(ts, camera_names)
 
                 ### query policy
                 if config['policy_class'] == "ACT":
                     if t % query_frequency == 0:
-                        all_actions = policy(qpos, curr_image)
+                        all_actions = policy(qpos, qtor, curr_image)
                     if temporal_agg:
                         all_time_actions[[t], t:t+num_queries] = all_actions
                         actions_for_curr_step = all_time_actions[:, t]
@@ -317,9 +330,9 @@ def eval_bc(config, ckpt_name, save_episode=True):
 
 
 def forward_pass(data, policy):
-    image_data, qpos_data, action_data, is_pad = data
-    image_data, qpos_data, action_data, is_pad = image_data.cuda(), qpos_data.cuda(), action_data.cuda(), is_pad.cuda()
-    return policy(qpos_data, image_data, action_data, is_pad) # TODO remove None
+    image_data, qpos_data, qtor_data, action_data, is_pad = data
+    image_data, qpos_data, qtor_data, action_data, is_pad = image_data.cuda(), qpos_data.cuda(), qtor_data.cuda(), action_data.cuda(), is_pad.cuda()
+    return policy(qpos_data, qtor_data, image_data, action_data, is_pad) # TODO remove None
 
 
 def train_bc(train_dataloader, val_dataloader, config):

@@ -1,7 +1,7 @@
 import pathlib
-
+HERE = str(pathlib.Path(__file__).parent.resolve())
 ### Task parameters
-DATA_DIR = "./dataset"
+DATA_DIR = HERE + "/dataset"
 SIM_TASK_CONFIGS = {
     'sim_transfer_cube_scripted':{
         'dataset_dir': DATA_DIR + '/sim_transfer_cube_scripted',
@@ -42,6 +42,27 @@ SIM_TASK_CONFIGS = {
         'dataset_dir': DATA_DIR + '/sim_transfer_cube_piper',
         'num_episodes': 50,
         'episode_len': 1200,
+        'camera_names': ['top']
+    },
+
+    'sim_transfer_cube_piper_torque':{
+        'dataset_dir': DATA_DIR + '/sim_transfer_cube_piper_torque',
+        'num_episodes': 50,
+        'episode_len': 1200,
+        'camera_names': ['top']
+    },
+
+    'sim_insertion_piper':{
+        'dataset_dir': DATA_DIR + '/sim_insertion_piper',
+        'num_episodes': 50,
+        'episode_len': 500,
+        'camera_names': ['top']
+    },
+
+    'sim_insertion_piper_torque':{
+        'dataset_dir': DATA_DIR + '/sim_insertion_piper_torque',
+        'num_episodes': 30,
+        'episode_len': 500,
         'camera_names': ['top']
     },
 }

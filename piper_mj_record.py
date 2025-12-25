@@ -1,7 +1,9 @@
 import time
 import numpy as np
 import collections
+import argparse
 from scipy.spatial.transform import Rotation as R
+from scipy.spatial.transform import Slerp
 from types import SimpleNamespace
 
 # Import constants from sim_env.py
@@ -34,6 +36,7 @@ try:
 except ImportError:
     TRACIK_AVAILABLE = False
     print("TracIKSolver not available - IK will not work")
+
 
 class BasePolicy:
     def __init__(self, inject_noise=False):
@@ -489,9 +492,99 @@ class PickAndTransferPolicyPiper(BasePolicy):
         self.step_count += 1
         return np.concatenate([action_left, action_right])
 
+class InsertionPolicyPiper(PickAndTransferPolicyPiper):
 
-class TransferCubeEETaskPiper():
-    def __init__(self, random=None):
+    def generate_trajectory(self, ts_first):
+        """Generate Cartesian waypoint trajectory (same as PickAndTransferPolicy)"""
+        # init_mocap_pose_right = ts_first.observation['mocap_pose_right']
+        # init_mocap_pose_left = ts_first.observation['mocap_pose_left']
+
+        world2left_pos = np.array([0, 0, 0])
+        world2left_quat = np.array([1, 0, 0, 0])
+        self.world2left_mat = self.pose_to_matrix(world2left_pos, world2left_quat)
+
+        world2right_pos = np.array([0, -0.56376582, 0])
+        world2right_quat = np.array([1, 0, 0, 0])
+        self.world2right_mat = self.pose_to_matrix(world2right_pos, world2right_quat)
+
+        peg_info = np.array(ts_first.observation['env_state']["peg"])
+        peg_xyz = peg_info[:3]
+        peg_quat = peg_info[3:]
+
+        socket_info = np.array(ts_first.observation['env_state']["socket"])
+        socket_xyz = socket_info[:3]
+        socket_quat = socket_info[3:]
+        # print(f"Generate trajectory for {box_xyz=}")
+
+        # Meeting points matching piper_mj_record.py
+        meet_xyz = np.array([0, -0.28188, 0.3])  # Center meeting point
+        meet_left_xyz = np.array([0, -0.28188, 0.3]) + np.array([0.0, 0.125, 0.0])  # Left meeting point
+        meet_right_xyz = np.array([0, -0.28188, 0.3]) + np.array([0.0, -0.125, 0.0])  # Right meeting point
+
+        # Define orientations matching piper_mj_record.py
+        # Left: euler (np.pi/2, 0, 0) -> quaternion [w, x, y, z] for pyquaternion
+        meeting_left_euler = (np.pi/2, 0, 0)
+        meet_left_quat_scipy = R.from_euler('xyz', meeting_left_euler).as_quat()  # [x, y, z, w]
+        meet_left_quat = np.array([meet_left_quat_scipy[3], meet_left_quat_scipy[0], meet_left_quat_scipy[1], meet_left_quat_scipy[2]])  # Convert to [w, x, y, z]
+
+        world2leftmeet_mat = self.pose_to_matrix(meet_left_xyz, meet_left_quat)
+        left2leftmeet_mat = np.linalg.inv(self.world2left_mat) @ world2leftmeet_mat
+        left2leftmeet_xyz = np.array([left2leftmeet_mat[0, 3], left2leftmeet_mat[1, 3], left2leftmeet_mat[2, 3]])
+        left2leftmeet_quat_scipy = R.from_matrix(left2leftmeet_mat[:3, :3]).as_quat()
+        left2leftmeet_quat = np.array([left2leftmeet_quat_scipy[3], left2leftmeet_quat_scipy[0], left2leftmeet_quat_scipy[1], left2leftmeet_quat_scipy[2]])  # Convert to [w, x, y, z]
+        
+        # Right: euler (0, np.pi/2, np.pi/2) -> quaternion [w, x, y, z] for pyquaternion
+        meeting_right_euler = (0, np.pi/2, np.pi/2)
+        meet_right_quat_scipy = R.from_euler('xyz', meeting_right_euler).as_quat()  # [x, y, z, w]
+        meet_right_quat = np.array([meet_right_quat_scipy[3], meet_right_quat_scipy[0], meet_right_quat_scipy[1], meet_right_quat_scipy[2]])  # Convert to [w, x, y, z]
+
+        world2rightmeet_mat = self.pose_to_matrix(meet_right_xyz, meet_right_quat)
+        right2rightmeet_mat = np.linalg.inv(self.world2right_mat) @ world2rightmeet_mat
+        right2rightmeet_xyz = np.array([right2rightmeet_mat[0, 3], right2rightmeet_mat[1, 3], right2rightmeet_mat[2, 3]])
+        right2rightmeet_quat_scipy = R.from_matrix(right2rightmeet_mat[:3, :3]).as_quat()
+        right2rightmeet_quat = np.array([right2rightmeet_quat_scipy[3], right2rightmeet_quat_scipy[0], right2rightmeet_quat_scipy[1], right2rightmeet_quat_scipy[2]])  # Convert to [w, x, y, z]
+
+        # Define orientations for cube reaching (matching piper_mj_record.py)
+        cube_reach_euler = (0, np.pi, 0)  # For left arm reaching to cube
+        cube_reach_quat_scipy = R.from_euler('xyz', cube_reach_euler).as_quat()  # [x, y, z, w]
+        cube_reach_quat = np.array([cube_reach_quat_scipy[3], cube_reach_quat_scipy[0], cube_reach_quat_scipy[1], cube_reach_quat_scipy[2]])  # Convert to [w, x, y, z]
+
+        gripper_close = 0.005
+        gripper_open = 0.02
+
+        # Left arm waypoints matching piper_mj_record.py exactly
+        self.left_trajectory = [
+            {"t": 0, "joint": [0, 0, 0, 0, 0, 0], "gripper": gripper_open},
+            {"t": 200, "xyz": socket_xyz + np.array([0.015, 0.0001, 0.125]), "quat": cube_reach_quat, "gripper": gripper_open},
+            {"t": 250, "xyz": socket_xyz + np.array([0.015, 0.0001, 0.1125]), "quat": cube_reach_quat, "gripper": gripper_open},
+            {"t": 300, "xyz": socket_xyz + np.array([0.015, 0.0001, 0.1]), "quat": cube_reach_quat, "gripper": gripper_open},
+            {"t": 350, "xyz": socket_xyz + np.array([0.015, 0.0001, 0.0875]), "quat": cube_reach_quat, "gripper": gripper_open},
+            {"t": 400, "xyz": socket_xyz + np.array([0.015, 0.0001, 0.075-0.005]), "quat": cube_reach_quat, "gripper": gripper_open},
+            {"t": 500, "xyz": socket_xyz + np.array([0.015, 0.0001, 0.075-0.005]), "quat": cube_reach_quat, "gripper": gripper_open},
+        ]
+
+        # Right arm waypoints matching piper_mj_record.py exactly
+        # self.right_trajectory = [
+        #     {"t": 0, "joint": [0, 0, 0, 0, 0, 0], "gripper": gripper_open},
+        #     {"t": 600, "xyz": right2rightmeet_xyz + np.array([0, -0.05, 0]), "quat": right2rightmeet_quat, "gripper": gripper_open},
+        #     {"t": 700, "xyz": right2rightmeet_xyz, "quat": right2rightmeet_quat, "gripper": gripper_open},
+        #     {"t": 800, "xyz": right2rightmeet_xyz, "quat": right2rightmeet_quat, "gripper": gripper_close},
+        #     {"t": 900, "xyz": right2rightmeet_xyz, "quat": right2rightmeet_quat, "gripper": gripper_close},
+        #     {"t": 1200, "joint": [0, 0, 0, 0, 0, 0], "gripper": gripper_close}
+        # ]
+
+        self.right_trajectory = [
+            {"t": 0, "joint": [0, 0, 0, 0, 0, 0], "gripper": gripper_open},
+            {"t": 500, "joint": [0, 0, 0, 0, 0, 0], "gripper": gripper_open}
+        ]
+
+        self.precompute_joint_trajectory(ts_first)
+
+
+class TransferCubeTaskPiper():
+
+    def __init__(self, random=None, enable_qtor=False):
+        self.enable_qtor = enable_qtor
         self.max_reward = 4
 
     def initialize_robots(self, data):
@@ -539,6 +632,17 @@ class TransferCubeEETaskPiper():
         return np.concatenate([left_arm_qvel, left_gripper_qvel, right_arm_qvel, right_gripper_qvel])
 
     @staticmethod
+    def get_qtor(data):
+        qtor_raw = data.actuator_force.copy()
+        left_qtor_raw = qtor_raw[:8]
+        right_qtor_raw = qtor_raw[8:16]
+        left_arm_qtor = left_qtor_raw[:6]
+        right_arm_qtor = right_qtor_raw[:6]
+        left_gripper_qtor = left_qtor_raw[6]
+        right_gripper_qtor = right_qtor_raw[6]
+        return np.concatenate([left_arm_qtor, [left_gripper_qtor], right_arm_qtor, [right_gripper_qtor]])
+
+    @staticmethod
     def get_env_state(data):
         env_state = data.qpos.copy()[16:]
         return env_state
@@ -548,6 +652,8 @@ class TransferCubeEETaskPiper():
         obs = collections.OrderedDict()
         obs['qpos'] = self.get_qpos(data)
         obs['qvel'] = self.get_qvel(data)
+        if self.enable_qtor:
+            obs['qtor'] = self.get_qtor(data)
         obs['env_state'] = self.get_env_state(data)
         obs['images'] = dict()
         # obs['images']['top'] = physics.render(height=480, width=640, camera_id='top')
@@ -589,12 +695,89 @@ class TransferCubeEETaskPiper():
         return reward
 
 
+class InsertionTaskPiper(TransferCubeTaskPiper):
 
-class PiperEnvironment():
+    def __init__(self, random=None, enable_qtor=False):
+        self.enable_qtor = enable_qtor
+        super().__init__(random=random)
+
+    @staticmethod
+    def get_env_state(data):
+        env_state = data.qpos.copy()[16:]
+        peg_pose = env_state[:7]
+        socket_pose = env_state[7:]
+        return {"peg": peg_pose, "socket": socket_pose}
+
+    def get_observation(self, data, renderer=None):
+        obs = collections.OrderedDict()
+        obs['qpos'] = self.get_qpos(data)
+        obs['qvel'] = self.get_qvel(data)
+        if self.enable_qtor:
+            obs['qtor'] = self.get_qtor(data)
+        env_state = self.get_env_state(data)
+        obs['env_state'] = dict()
+        obs['env_state']["peg"] = env_state["peg"]
+        obs['env_state']["socket"] = env_state["socket"]
+        obs['images'] = dict()
+        # obs['images']['top'] = physics.render(height=480, width=640, camera_id='top')
+        if renderer is not None:
+            renderer.update_scene(data, camera="top")
+            obs['images']['top'] = renderer.render()
+        else:
+            obs['images']['top'] = np.random.randint(0, 255, (480, 640, 3))
+
+        return obs
+
+    def get_reward(self, model, data):
+        all_contact_pairs = []
+        for i_contact in range(data.ncon):
+            id_geom_1 = data.contact[i_contact].geom1
+            id_geom_2 = data.contact[i_contact].geom2
+            name_geom_1 = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, id_geom_1)
+            name_geom_2 = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, id_geom_2)
+            contact_pair = (name_geom_1, name_geom_2)
+            all_contact_pairs.append(contact_pair)
+
+        touch_right_gripper = ("red_peg", "piper_right/7_link7") in all_contact_pairs or \
+                             ("red_peg", "piper_right/8_link8") in all_contact_pairs
+        touch_left_gripper = ("socket-1", "piper_left/7_link7") in all_contact_pairs or \
+                             ("socket-1", "piper_left/8_link8") in all_contact_pairs or \
+                             ("socket-2", "piper_left/7_link7") in all_contact_pairs or \
+                             ("socket-2", "piper_left/8_link8") in all_contact_pairs or \
+                             ("socket-3", "piper_left/7_link7") in all_contact_pairs or \
+                             ("socket-3", "piper_left/8_link8") in all_contact_pairs or \
+                             ("socket-4", "piper_left/7_link7") in all_contact_pairs or \
+                             ("socket-4", "piper_left/8_link8") in all_contact_pairs
+
+        peg_touch_table = ("red_peg", "table") in all_contact_pairs
+        socket_touch_table = ("socket-1", "table") in all_contact_pairs or \
+                             ("socket-2", "table") in all_contact_pairs or \
+                             ("socket-3", "table") in all_contact_pairs or \
+                             ("socket-4", "table") in all_contact_pairs
+        peg_touch_socket = ("red_peg", "socket-1") in all_contact_pairs or \
+                           ("red_peg", "socket-2") in all_contact_pairs or \
+                           ("red_peg", "socket-3") in all_contact_pairs or \
+                           ("red_peg", "socket-4") in all_contact_pairs
+        pin_touched = ("red_peg", "pin") in all_contact_pairs
+
+        reward = 0
+        if touch_left_gripper and touch_right_gripper: # touch both
+            reward = 1
+        if touch_left_gripper and touch_right_gripper and (not peg_touch_table) and (not socket_touch_table): # grasp both
+            reward = 2
+        if peg_touch_socket and (not peg_touch_table) and (not socket_touch_table): # peg and socket touching
+            reward = 3
+        if pin_touched: # successful insertion
+            reward = 4
+        return reward
+
+
+class PiperCubeTransferEnvironment():
+
     def __init__(self, task, model, data):
         self.model = model
         self.data = data
-        self.task: TransferCubeEETaskPiper = task
+        self.task: TransferCubeTaskPiper = task
         self.viewer = mujoco.viewer.launch_passive(self.model, self.data)
         self.renderer = mujoco.Renderer(model, height=480, width=640)
 
@@ -640,13 +823,72 @@ class PiperEnvironment():
         ts = SimpleNamespace(observation=observation, reward=reward, action=action)
         return ts
 
+
+class PiperInsertionEnvironment(PiperCubeTransferEnvironment):
+
+    def __init__(self, task, model, data):
+        self.model = model
+        self.data = data
+        self.task: InsertionTaskPiper = task
+        self.viewer = mujoco.viewer.launch_passive(self.model, self.data)
+        self.renderer = mujoco.Renderer(model, height=480, width=640)
+
+    def reset(self):
+        mujoco.mj_resetDataKeyframe(self.model, self.data, 0)
+
+        # peg_position_x_lim = [0.15, 0.35]
+        # peg_position_y_lim = [-0.01, 0.01]
+        # peg_position_x = np.random.uniform(peg_position_x_lim[0], peg_position_x_lim[1])
+        # peg_position_y = np.random.uniform(peg_position_y_lim[0], peg_position_y_lim[1])
+        # peg_position = np.array([peg_position_x, peg_position_y, 0.05])
+        # peg_start_idx = 16
+        # np.copyto(self.data.qpos[peg_start_idx : peg_start_idx + 3], peg_position)
+
+        # -0.56376582
+        socket_position_x_lim = [0.15, 0.35]
+        socket_position_y_lim = [-0.1, 0.1]
+        socket_position_x = np.random.uniform(socket_position_x_lim[0], socket_position_x_lim[1])
+        socket_position_y = np.random.uniform(socket_position_y_lim[0], socket_position_y_lim[1])
+        socket_position = np.array([socket_position_x, socket_position_y, 0.1])
+        socket_start_idx = 23
+        np.copyto(self.data.qpos[socket_start_idx : socket_start_idx + 3], socket_position)
+
+        mujoco.mj_step(self.model, self.data)
+        self.viewer.sync()
+        observation = self.task.get_observation(self.data)
+
+        ts = SimpleNamespace(observation=observation, reward=0, action=np.zeros(14))
+        return ts
+
+
 if __name__ == "__main__":
 
-    model = mujoco.MjModel.from_xml_path(os.path.join(XML_DIR, f'test_piper.xml'))
+    parser = argparse.ArgumentParser(description='Record episodes for piper robot')
+    parser.add_argument('--task', type=str, default='transfer_cube', 
+                        choices=['transfer_cube', 'insertion'],
+                        help='Task type: transfer_cube or insertion')
+    parser.add_argument('--enable_torque', action='store_true',
+                        help='Enable torque observations (qtor)')
+    args = parser.parse_args()
+
+    # Select XML file based on task
+    if args.task == 'transfer_cube':
+        xml_file = 'bimanual_piper_transfer_cube.xml'
+    else:  # insertion
+        xml_file = 'bimanual_piper_insertion.xml'
+
+    model = mujoco.MjModel.from_xml_path(os.path.join(XML_DIR, xml_file))
     data = mujoco.MjData(model)
 
-    task = TransferCubeEETaskPiper()
-    env = PiperEnvironment(task, model, data)
+    # Create task and environment based on task type
+    if args.task == 'transfer_cube':
+        task = TransferCubeTaskPiper(enable_qtor=args.enable_torque)
+        env = PiperCubeTransferEnvironment(task, model, data)
+        policy_class = PickAndTransferPolicyPiper
+    else:  # insertion
+        task = InsertionTaskPiper(enable_qtor=args.enable_torque)
+        env = PiperInsertionEnvironment(task, model, data)
+        policy_class = InsertionPolicyPiper
 
     # for _ in range(10):
     #     ts = env.reset()
@@ -664,12 +906,15 @@ if __name__ == "__main__":
         print(f"Episode {episode_idx}")
         print("=" * 100)
         ts = env.reset()
-        policy = PickAndTransferPolicyPiper(inject_noise=False)
+        policy = policy_class(inject_noise=False)
         episode = [ts]
-        for _ in range(1200-1):
+        for idx in range(1200-1):
+        # for idx in range(500-1):
             action = policy(ts)
             ts = env.step(action)
             episode.append(ts)
+            # if idx >= 200:
+            #     input("Current timestep: " + str(idx) + ". Press Enter to continue...")
             # plt_img.set_data(ts.observation['images'][render_cam_name])
             # # plt.pause(0.002)
 
@@ -681,9 +926,14 @@ if __name__ == "__main__":
             '/reward': [],
             '/timestamp': [],
         }
+        if args.enable_torque:
+            data_dict['/observations/qtor'] = []
+        
         for time_step, ts in enumerate(episode):
             data_dict['/observations/qpos'].append(ts.observation['qpos'])
             data_dict['/observations/qvel'].append(ts.observation['qvel'])
+            if args.enable_torque:
+                data_dict['/observations/qtor'].append(ts.observation['qtor'])
             data_dict['/observations/images/top'].append(ts.observation['images']['top'])
             data_dict['/action'].append(ts.action)
             data_dict['/reward'].append(ts.reward)
@@ -697,7 +947,9 @@ if __name__ == "__main__":
             continue
 
         max_timesteps = len(episode)
-        dataset_dir = "/home/jeong/zeno/wholebody-teleop/act/dataset/sim_transfer_cube_piper"
+        # Create dataset directory name based on task and torque setting
+        torque_suffix = "_torque" if args.enable_torque else ""
+        dataset_dir = f"/home/jeong/zeno/wholebody-teleop/act/dataset/sim_{args.task}_piper{torque_suffix}"
         os.makedirs(dataset_dir, exist_ok=True)
         dataset_path = os.path.join(dataset_dir, f'episode_{episode_idx}')
         print(f"Saving episode {episode_idx} to {dataset_path}, {max_timesteps} timesteps...")
@@ -708,6 +960,8 @@ if __name__ == "__main__":
             image.create_dataset('top', (max_timesteps, 480, 640, 3), dtype='uint8', chunks=(1, 480, 640, 3))
             qpos = obs.create_dataset('qpos', (max_timesteps, 14))
             qvel = obs.create_dataset('qvel', (max_timesteps, 14))
+            if args.enable_torque:
+                qtor = obs.create_dataset('qtor', (max_timesteps, 14))
             action = root.create_dataset('action', (max_timesteps, 14))
             reward = root.create_dataset('reward', (max_timesteps,))
             timestamp = root.create_dataset('timestamp', (max_timesteps,))
@@ -719,5 +973,5 @@ if __name__ == "__main__":
 
         episode_idx += 1
 
-        if episode_idx > 50:
+        if episode_idx >= 50:
             break

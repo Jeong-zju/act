@@ -18,7 +18,7 @@ from visualize_episodes import save_videos
 
 from sim_env import BOX_POSE
 
-from piper_mj_record import PiperEnvironment, TransferCubeEETaskPiper
+from piper_mj_record import PiperCubeTransferEnvironment, TransferCubeTaskPiper, PiperInsertionEnvironment, InsertionTaskPiper
 from constants import XML_DIR
 import mujoco
 
@@ -97,7 +97,7 @@ def main(args):
         # ckpt_names = [f'policy_epoch_1100_seed_0.ckpt']
         results = []
         for ckpt_name in ckpt_names:
-            success_rate, avg_return = eval_bc(config, ckpt_name, save_episode=True)
+            success_rate, avg_return = eval_bc(config, ckpt_name, save_episode=False)
             results.append([ckpt_name, success_rate, avg_return])
 
         for ckpt_name, success_rate, avg_return in results:
@@ -170,19 +170,28 @@ def eval_bc(config, ckpt_name, save_episode=True):
     temporal_agg = config['temporal_agg']
     onscreen_cam = 'angle'
 
+    import pathlib
+    HERE = str(pathlib.Path(__file__).parent.resolve())
+
     # load policy and stats
-    ckpt_path = os.path.join(ckpt_dir, ckpt_name)
+    ckpt_path = os.path.join(HERE, ckpt_dir, ckpt_name)
     policy = make_policy(policy_class, policy_config)
     loading_status = policy.load_state_dict(torch.load(ckpt_path))
     print(loading_status)
     policy.cuda()
     policy.eval()
     print(f'Loaded: {ckpt_path}')
-    stats_path = os.path.join(ckpt_dir, f'dataset_stats.pkl')
+    stats_path = os.path.join(HERE, ckpt_dir, f'dataset_stats.pkl')
     with open(stats_path, 'rb') as f:
         stats = pickle.load(f)
 
     pre_process = lambda s_qpos: (s_qpos - stats['qpos_mean']) / stats['qpos_std']
+    # Use qtor-specific normalization if available, otherwise fallback to qpos normalization
+    if 'qtor_mean' in stats and 'qtor_std' in stats:
+        pre_process_qtor = lambda s_qtor: (s_qtor - stats['qtor_mean']) / stats['qtor_std']
+    else:
+        # Fallback: if no qtor stats, use zeros (will be normalized to zeros anyway)
+        pre_process_qtor = lambda s_qtor: np.zeros_like(s_qtor)
     post_process = lambda a: a * stats['action_std'] + stats['action_mean']
 
     # load environment
@@ -194,11 +203,26 @@ def eval_bc(config, ckpt_name, save_episode=True):
     else:
         # from sim_env import make_sim_env
         # env = make_sim_env(task_name)
-        model = mujoco.MjModel.from_xml_path(os.path.join(XML_DIR, f'test_piper.xml'))
-        data = mujoco.MjData(model)
-        task = TransferCubeEETaskPiper()
-        env = PiperEnvironment(task, model, data)
-        env_max_reward = 4
+        if 'sim_transfer_cube' in task_name:
+            model = mujoco.MjModel.from_xml_path(os.path.join(XML_DIR, f'bimanual_piper_transfer_cube.xml'))
+            data = mujoco.MjData(model)
+            if 'torque' in task_name:
+                enable_qtor = True
+            else:
+                enable_qtor = False
+            task = TransferCubeTaskPiper(enable_qtor=enable_qtor)
+            env = PiperCubeTransferEnvironment(task, model, data)
+            env_max_reward = 4
+        elif 'sim_insertion' in task_name:
+            model = mujoco.MjModel.from_xml_path(os.path.join(XML_DIR, f'bimanual_piper_insertion.xml'))
+            data = mujoco.MjData(model)
+            if 'torque' in task_name:
+                enable_qtor = True
+            else:
+                enable_qtor = False
+            task = InsertionTaskPiper(enable_qtor=enable_qtor)
+            env = PiperInsertionEnvironment(task, model, data)
+            env_max_reward = 4
 
     query_frequency = policy_config['num_queries']
     if temporal_agg:
@@ -210,6 +234,7 @@ def eval_bc(config, ckpt_name, save_episode=True):
     num_rollouts = 50
     episode_returns = []
     highest_rewards = []
+    successes = []  # Track success based on last timestep reward
     for rollout_id in range(num_rollouts):
         rollout_id += 0
         ### set task
@@ -252,12 +277,19 @@ def eval_bc(config, ckpt_name, save_episode=True):
                 qpos = pre_process(qpos_numpy)
                 qpos = torch.from_numpy(qpos).float().cuda().unsqueeze(0)
                 qpos_history[:, t] = qpos
+                # get qtor if available, otherwise use zeros
+                if 'qtor' in obs:
+                    qtor_numpy = np.array(obs['qtor'])
+                else:
+                    qtor_numpy = np.zeros_like(qpos_numpy)
+                qtor = pre_process_qtor(qtor_numpy)
+                qtor = torch.from_numpy(qtor).float().cuda().unsqueeze(0)
                 curr_image = get_image(ts, camera_names)
 
                 ### query policy
                 if config['policy_class'] == "ACT":
                     if t % query_frequency == 0:
-                        all_actions = policy(qpos, curr_image)
+                        all_actions = policy(qpos, qtor, curr_image)
                     if temporal_agg:
                         all_time_actions[[t], t:t+num_queries] = all_actions
                         actions_for_curr_step = all_time_actions[:, t]
@@ -293,19 +325,25 @@ def eval_bc(config, ckpt_name, save_episode=True):
             move_grippers([env.puppet_bot_left, env.puppet_bot_right], [PUPPET_GRIPPER_JOINT_OPEN] * 2, move_time=0.5)  # open
             pass
 
+        # Store the last timestep's reward to determine success
+        last_ts_reward = ts.reward if ts.reward is not None else 0
+        is_success = (last_ts_reward == env_max_reward)
+        successes.append(is_success)
+        
         rewards = np.array(rewards)
         episode_return = np.sum(rewards[rewards!=None])
         episode_returns.append(episode_return)
         episode_highest_reward = np.max(rewards)
         highest_rewards.append(episode_highest_reward)
-        print(f'Rollout {rollout_id}\n{episode_return=}, {episode_highest_reward=}, {env_max_reward=}, Success: {episode_highest_reward==env_max_reward}')
+        print(f'Rollout {rollout_id}\n{episode_return=}, {episode_highest_reward=}, last_ts_reward={last_ts_reward}, {env_max_reward=}, Success: {is_success}')
 
         if save_episode:
             save_videos(image_list, DT, video_path=os.path.join(ckpt_dir, f'video{rollout_id}.mp4'))
 
-    success_rate = np.mean(np.array(highest_rewards) == env_max_reward)
+    # Calculate success rate based on last timestep reward
+    success_rate = np.mean(np.array(successes))
     avg_return = np.mean(episode_returns)
-    summary_str = f'\nSuccess rate: {success_rate}\nAverage return: {avg_return}\n\n'
+    summary_str = f'\nSuccess rate (based on last timestep reward): {success_rate}\nAverage return: {avg_return}\n\n'
     for r in range(env_max_reward+1):
         more_or_equal_r = (np.array(highest_rewards) >= r).sum()
         more_or_equal_r_rate = more_or_equal_r / num_rollouts
@@ -325,9 +363,9 @@ def eval_bc(config, ckpt_name, save_episode=True):
 
 
 def forward_pass(data, policy):
-    image_data, qpos_data, action_data, is_pad = data
-    image_data, qpos_data, action_data, is_pad = image_data.cuda(), qpos_data.cuda(), action_data.cuda(), is_pad.cuda()
-    return policy(qpos_data, image_data, action_data, is_pad) # TODO remove None
+    image_data, qpos_data, qtor_data, action_data, is_pad = data
+    image_data, qpos_data, qtor_data, action_data, is_pad = image_data.cuda(), qpos_data.cuda(), qtor_data.cuda(), action_data.cuda(), is_pad.cuda()
+    return policy(qpos_data, qtor_data, image_data, action_data, is_pad) # TODO remove None
 
 
 def train_bc(train_dataloader, val_dataloader, config):

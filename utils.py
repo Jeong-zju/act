@@ -51,6 +51,11 @@ class EpisodicDataset(torch.utils.data.Dataset):
             # get observation at start_ts only
             qpos = root['/observations/qpos'][start_ts]
             qvel = root['/observations/qvel'][start_ts]
+            # load qtor if available, otherwise use zeros
+            if '/observations/qtor' in root:
+                qtor = root['/observations/qtor'][start_ts]
+            else:
+                qtor = np.zeros_like(qpos)
             image_dict = dict()
             for cam_name in self.camera_names:
                 image_dict[cam_name] = root[f'/observations/images/{cam_name}'][start_ts]
@@ -78,6 +83,7 @@ class EpisodicDataset(torch.utils.data.Dataset):
         # construct observations
         image_data = torch.from_numpy(all_cam_images)
         qpos_data = torch.from_numpy(qpos).float()
+        qtor_data = torch.from_numpy(qtor).float()
         action_data = torch.from_numpy(padded_action).float()
         is_pad = torch.from_numpy(is_pad).bool()
 
@@ -88,8 +94,14 @@ class EpisodicDataset(torch.utils.data.Dataset):
         image_data = image_data / 255.0
         action_data = (action_data - self.norm_stats["action_mean"]) / self.norm_stats["action_std"]
         qpos_data = (qpos_data - self.norm_stats["qpos_mean"]) / self.norm_stats["qpos_std"]
+        # normalize qtor if stats available, otherwise use raw values
+        if "qtor_mean" in self.norm_stats and "qtor_std" in self.norm_stats:
+            qtor_data = (qtor_data - self.norm_stats["qtor_mean"]) / self.norm_stats["qtor_std"]
+        else:
+            # if no normalization stats, use raw values (assumes already normalized or will be handled elsewhere)
+            pass
 
-        return image_data, qpos_data, action_data, is_pad
+        return image_data, qpos_data, qtor_data, action_data, is_pad
 
 
 def get_norm_stats(dataset_dir, num_episodes):
@@ -104,20 +116,29 @@ def get_norm_stats(dataset_dir, num_episodes):
         return p1
 
     all_qpos_data = []
+    all_qtor_data = []
     all_action_data = []
     example_qpos = None
+    has_qtor = False
     for episode_idx in range(num_episodes):
         dataset_path = _episode_hdf5_path(episode_idx)
         with h5py.File(dataset_path, "r") as root:
             qpos = root["/observations/qpos"][()]
             action = root["/action"][()]
+            if '/observations/qtor' in root:
+                qtor = root["/observations/qtor"][()]
+                has_qtor = True  # Mark that we found actual qtor data
+            else:
+                qtor = np.zeros_like(qpos)
         all_qpos_data.append(torch.from_numpy(qpos))
+        all_qtor_data.append(torch.from_numpy(qtor))
         all_action_data.append(torch.from_numpy(action))
         example_qpos = qpos
 
     # Episodes can have different lengths, so concatenate along time.
     all_qpos_data = torch.cat(all_qpos_data, dim=0)
     all_action_data = torch.cat(all_action_data, dim=0)
+    all_qtor_data = torch.cat(all_qtor_data, dim=0)
 
     # normalize action data
     action_mean = all_action_data.mean(dim=0, keepdim=True)
@@ -136,6 +157,18 @@ def get_norm_stats(dataset_dir, num_episodes):
         "qpos_std": qpos_std.numpy().squeeze(),
         "example_qpos": example_qpos,
     }
+    
+    # Only compute qtor stats if dataset actually contains qtor data
+    # This ensures backward compatibility: old models trained without qtor 
+    # will have stats without qtor_mean/qtor_std, and eval will use zeros
+    if has_qtor:
+        # normalize qtor data
+        qtor_mean = all_qtor_data.mean(dim=0, keepdim=True)
+        qtor_std = all_qtor_data.std(dim=0, keepdim=True, unbiased=False)
+        qtor_std = torch.clip(qtor_std, 1e-2, np.inf)  # clipping
+        stats["qtor_mean"] = qtor_mean.numpy().squeeze()
+        stats["qtor_std"] = qtor_std.numpy().squeeze()
+    
     return stats
 
 
