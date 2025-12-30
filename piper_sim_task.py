@@ -236,12 +236,18 @@ class MobileDualPiperTaskPiper():
         right_gripper_qtor = qtor_raw[13]
         return np.concatenate([left_arm_qtor, left_gripper_qtor, right_arm_qtor, right_gripper_qtor])
 
+    @staticmethod
+    def get_env_state(data):
+        env_state = data.qpos.copy()[19:]
+        return env_state
+
     def get_observation(self, data, renderer=None):
         obs = collections.OrderedDict()
         obs['qpos'] = self.get_qpos(data)
         obs['qvel'] = self.get_qvel(data)
         if self.enable_qtor:
             obs['qtor'] = self.get_qtor(data)
+        obs['env_state'] = self.get_env_state(data)
         obs['images'] = dict()
         if renderer is not None:
             renderer.update_scene(data, camera="top")

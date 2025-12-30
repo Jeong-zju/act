@@ -11,12 +11,14 @@ from mujoco_lidar import scan_gen
 from piper_sim_env import MobileDualPiperEnvironment
 from piper_sim_task import MobileDualPiperTaskPiper
 from constants import DT
+from piper_policy_scripted import MobileDualPiperPickAndTransferPolicyPiper
 
 # Create MuJoCo model and data
 mj_model = mujoco.MjModel.from_xml_path("/home/jeong/zeno/wholebody-teleop/act/assets/mobile_piper.xml")
 mj_data = mujoco.MjData(mj_model)
 task = MobileDualPiperTaskPiper()
 env = MobileDualPiperEnvironment(mj_model, mj_data, task)
+policy = MobileDualPiperPickAndTransferPolicyPiper()
 ts = env.reset()
 t = 0
 
@@ -29,11 +31,12 @@ plt_img_right = ax.imshow(ts.observation['images']['right'])
 plt.ion()
 
 while env.viewer.is_running():
-    action = np.array([0.0] * 17)
-    action[0] = 1
-    action[2] = 1
-    action[9] = (np.sin(np.pi * t) + 1) / 2
-    action[16] = (np.cos(np.pi * t) + 1) / 2
+    # action = np.array([0.0] * 17)
+    # action[0] = 1
+    # action[2] = 1
+    # action[9] = (np.sin(np.pi * t) + 1) / 2
+    # action[16] = (np.cos(np.pi * t) + 1) / 2
+    action = policy(ts)
     ts = env.step(action)
     # ts = env.step(np.array([0, 0, 0]))
     plt_img_top.set_data(ts.observation['images']['top'])

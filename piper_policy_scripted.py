@@ -7,6 +7,8 @@ import sys
 import os
 sys.path.append(os.path.dirname(__file__))
 
+from constants import DT
+
 try:
     from tracikpy import TracIKSolver
     TRACIK_AVAILABLE = True
@@ -555,3 +557,219 @@ class InsertionPolicyPiper(PickAndTransferPolicyPiper):
         ]
 
         self.precompute_joint_trajectory(ts_first)
+
+
+class MobileDualPiperPickAndTransferPolicyPiper(PickAndTransferPolicyPiper):
+    """Policy for mobile dual piper robot: base moves to pick column, left arm grasps cube, 
+    base moves to place column, left arm places cube on top"""
+    
+    def __init__(self, inject_noise=False, robot_model_path=None):
+        super().__init__(inject_noise, robot_model_path)
+        self.base_trajectory = None  # Base velocity commands [vx, vy, omega]
+        self.base_positions = None  # Base positions for reference [x, y, yaw]
+        
+    def generate_trajectory(self, ts_first):
+        """Generate trajectory for mobile base and left arm"""
+        # Read cube position and quaternion from env_state
+        env_state = np.array(ts_first.observation['env_state'])
+        cube_xyz = env_state[:3]
+        cube_quat = env_state[3:7]  # [w, x, y, z] format
+        world2cube_mat = self.pose_to_matrix(cube_xyz, cube_quat)
+        
+        # Column positions (from XML)
+        # pick_column_xyz = np.array([1.0, 1.0, 0.5])
+        # place_column_xyz = np.array([1.0, -1.0, 0.5])
+        
+        # Calculate robot base (mobile_base) positions
+        # mobile_base is at [0, 0, 0.3] in world when at origin
+        # left_mount is at [0.26, 0.28, 0.57] relative to mobile_base
+        # arm base_link (piper_left/base_link) is at [0, 0, 0] relative to left_mount
+        # So arm_base_link world position = mobile_base_world + [0.26, 0.28, 0.57] + [0, 0, 0.3] (mobile_base z offset)
+        # For base_yaw = 0: arm_base_link = [base_x + 0.26, base_y + 0.28, 0.3 + 0.57] = [base_x + 0.26, base_y + 0.28, 0.87]
+        
+        left_mount_offset = np.array([0.26, 0.28, 0.57])  # Relative to mobile_base
+        base2left_mat = self.pose_to_matrix(left_mount_offset, np.array([1.0, 0.0, 0.0, 0.0]))
+
+        mobile_base_z_offset = 0.3  # mobile_base body z position in world
+        base_init = np.array([0.0, 0.0, 0.0])
+        base_pick = np.array([0.5-0.26, 1.0-0.28, 0.0])
+        base_place = np.array([0.5-0.26, -1.0-0.28, 0.0])
+
+        pick_world2base_mat = self.pose_to_matrix(np.array([base_pick[0], base_pick[1], mobile_base_z_offset]), np.array([1.0, 0.0, 0.0, 0.0]))
+        pick_left2cube_mat = np.linalg.inv(pick_world2base_mat @ base2left_mat) @ world2cube_mat
+
+        pick_left_xyz = np.array([pick_left2cube_mat[0, 3], pick_left2cube_mat[1, 3], pick_left2cube_mat[2, 3]])
+        pick_left_quat_scipy = R.from_matrix(pick_left2cube_mat[:3, :3]).as_quat()
+        pick_left_quat = np.array([pick_left_quat_scipy[3], pick_left_quat_scipy[0], pick_left_quat_scipy[1], pick_left_quat_scipy[2]])  # Convert to [w, x, y, z]
+
+        place_world2base_mat = self.pose_to_matrix(np.array([base_place[0], base_place[1], mobile_base_z_offset]), np.array([1.0, 0.0, 0.0, 0.0]))
+        place_left2cube_mat = np.linalg.inv(place_world2base_mat @ base2left_mat) @ world2cube_mat
+
+        place_left_xyz = np.array([place_left2cube_mat[0, 3], place_left2cube_mat[1, 3], place_left2cube_mat[2, 3]])
+        place_left_quat_scipy = R.from_matrix(place_left2cube_mat[:3, :3]).as_quat()
+        place_left_quat = np.array([place_left_quat_scipy[3], place_left_quat_scipy[0], place_left_quat_scipy[1], place_left_quat_scipy[2]])  # Convert to [w, x, y, z]
+
+
+
+
+
+
+        
+        # Calculate robot base positions to allow left arm to reach cube
+        # We want arm_base_link to be positioned so arm can reach cube
+        # For simplicity, assume base_yaw = 0 (no rotation)
+        
+        
+        # Gripper values
+        gripper_close = 0.005
+        gripper_open = 0.035
+        
+        # # Define desired gripper orientations in world frame
+        # cube_reach_euler = (0, np.pi, 0)  # For left arm reaching to cube
+        # cube_reach_quat_scipy = R.from_euler('xyz', cube_reach_euler).as_quat()  # [x, y, z, w]
+        # cube_reach_quat_world = np.array([cube_reach_quat_scipy[3], cube_reach_quat_scipy[0], cube_reach_quat_scipy[1], cube_reach_quat_scipy[2]])  # Convert to [w, x, y, z]
+        
+        # # Place orientation (same as cube_reach)
+        # place_quat_world = cube_reach_quat_world
+        
+        # # Transform cube pose to ARM BASE FRAME (piper_left/base_link) at pick position
+        # # Arm base_link world position when robot base is at pick position:
+        # arm_base_pick_world_pos = np.array([
+        #     base_pick_x + left_mount_offset[0],
+        #     base_pick_y + left_mount_offset[1],
+        #     mobile_base_z_offset + left_mount_offset[2]
+        # ])
+        # arm_base_pick_world_quat = np.array([np.cos(base_pick_yaw/2), 0, 0, np.sin(base_pick_yaw/2)])
+        # world2arm_base_pick_mat = self.pose_to_matrix(arm_base_pick_world_pos, arm_base_pick_world_quat)
+        
+        # # Desired gripper pose in world frame: cube position + desired orientation
+        # cube_gripper_world_mat = self.pose_to_matrix(cube_xyz, cube_reach_quat_world)
+        # # Transform to arm base frame
+        # arm_base2cube_gripper_mat = np.linalg.inv(world2arm_base_pick_mat) @ cube_gripper_world_mat
+        # cube_arm_base_xyz = arm_base2cube_gripper_mat[:3, 3]
+        # cube_arm_base_quat_scipy = R.from_matrix(arm_base2cube_gripper_mat[:3, :3]).as_quat()
+        # cube_arm_base_quat = np.array([cube_arm_base_quat_scipy[3], cube_arm_base_quat_scipy[0], cube_arm_base_quat_scipy[1], cube_arm_base_quat_scipy[2]])
+        
+        # # Transform place pose to ARM BASE FRAME at place position
+        # arm_base_place_world_pos = np.array([
+        #     base_place_x + left_mount_offset[0],
+        #     base_place_y + left_mount_offset[1],
+        #     mobile_base_z_offset + left_mount_offset[2]
+        # ])
+        # arm_base_place_world_quat = np.array([np.cos(base_place_yaw/2), 0, 0, np.sin(base_place_yaw/2)])
+        # world2arm_base_place_mat = self.pose_to_matrix(arm_base_place_world_pos, arm_base_place_world_quat)
+        
+        # # Place target position (on top of column) with desired orientation
+        # place_target_xyz = place_column_xyz + np.array([0, 0, 0.1])  # 10cm above column
+        # place_target_world_mat = self.pose_to_matrix(place_target_xyz, place_quat_world)
+        # arm_base2place_mat = np.linalg.inv(world2arm_base_place_mat) @ place_target_world_mat
+        # place_arm_base_xyz = arm_base2place_mat[:3, 3]
+        # place_arm_base_quat_scipy = R.from_matrix(arm_base2place_mat[:3, :3]).as_quat()
+        # place_arm_base_quat = np.array([place_arm_base_quat_scipy[3], place_arm_base_quat_scipy[0], place_arm_base_quat_scipy[1], place_arm_base_quat_scipy[2]])
+        
+        # Left arm waypoints (in ARM BASE FRAME - piper_left/base_link)
+        # Timing: Robot base reaches pick at t=400, arm grasps t=400-600, robot base moves to place t=600-1000, arm places t=1000-1200
+        # Note: During robot base movement (t=600-1000), arm maintains lifted position
+        # The waypoint at t=1000 assumes robot base is at place position
+        self.left_trajectory = [
+            {"t": 0, "joint": [0, 0, 0, 0, 0, 0], "gripper": gripper_open},
+            {"t": 400, "xyz": pick_left_xyz + np.array([-0.2, 0, 0]), "quat": pick_left_quat, "gripper": gripper_open},  # Approach cube (in arm base frame)
+            {"t": 500, "xyz": pick_left_xyz + np.array([-0.1, 0, 0]), "quat": pick_left_quat, "gripper": gripper_open},  # Reach cube (in arm base frame)
+            {"t": 600, "xyz": pick_left_xyz + np.array([-0.1, 0, 0]), "quat": pick_left_quat, "gripper": gripper_close},  # Grasp (in arm base frame)
+            {"t": 1000, "joint": [0, 0, 0, 0, 0, 0], "gripper": gripper_close},  # Return to home
+            {"t": 1400, "xyz": place_left_xyz + np.array([-0.1, 0, 0]), "quat": place_left_quat, "gripper": gripper_close},  # Reach cube (in arm base frame)
+            {"t": 1500, "xyz": place_left_xyz + np.array([-0.1, 0, 0]), "quat": place_left_quat, "gripper": gripper_open},  # Reach cube (in arm base frame)
+            {"t": 2000, "joint": [0, 0, 0, 0, 0, 0], "gripper": gripper_open},  # Return to home
+        ]
+        
+        # Right arm stays at home position
+        self.right_trajectory = [
+            {"t": 0, "joint": [0, 0, 0, 0, 0, 0], "gripper": gripper_open},
+            {"t": 1200, "joint": [0, 0, 0, 0, 0, 0], "gripper": gripper_open}
+        ]
+
+        self.base_trajectory = [
+            {"t": 0, "base": base_init},
+            {"t": 400, "base": base_pick},
+            {"t": 600, "base": base_pick},
+            {"t": 1000, "base": base_place},
+            {"t": 1400, "base": base_place},
+            {"t": 1500, "base": base_place},
+            {"t": 2000, "base": base_place},
+        ]
+        
+        # Precompute joint trajectory
+        self.precompute_trajectory(ts_first)
+
+    def precompute_trajectory(self, ts_first):
+        self.precompute_joint_trajectory(ts_first)
+        max_timestep = max(
+            max(wp['t'] for wp in self.left_trajectory),
+            max(wp['t'] for wp in self.right_trajectory)
+        )
+        for t in range(max_timestep + 1):
+            base_vel = self._get_interpolated_basevelocity(t, self.base_trajectory)
+            self.precomputed_trajectory[t]['base_vel'] = base_vel
+        print(f"Precomputed trajectory with {len(self.precomputed_trajectory)} timesteps")
+
+    def _get_interpolated_basevelocity(self, t, base_trajectory):
+        curr_waypoint = None
+        next_waypoint = None
+        for i, wp in enumerate(base_trajectory):
+            if wp['t'] <= t:
+                curr_waypoint = wp
+                if i + 1 < len(base_trajectory):
+                    next_waypoint = base_trajectory[i + 1]
+                else:
+                    next_waypoint = wp
+            else:
+                next_waypoint = wp
+                break
+        
+        t_range = next_waypoint['t'] - curr_waypoint['t']
+        if t_range == 0:
+            return np.array([0.0, 0.0, 0.0])
+        base_vel = (next_waypoint['base'] - curr_waypoint['base']) / (t_range * DT)
+        return base_vel
+
+    def __call__(self, ts):
+        """Generate action for mobile dual piper: [vx, vy, omega, left_arm_joints(6), left_gripper(1), right_arm_joints(6), right_gripper(1)]"""
+        # Generate trajectory at first timestep
+        if self.step_count == 0:
+            self.generate_trajectory(ts)
+        
+        # Get base velocity command
+        # vx, vy, omega = self._get_base_velocity(self.step_count)
+        
+        # Get arm joint positions and gripper from precomputed trajectory
+        if self.precomputed_trajectory is not None and self.step_count < len(self.precomputed_trajectory):
+            step_data = self.get_precomputed_step(self.step_count)
+            base_vel = step_data['base_vel']
+            left_joints = step_data['left_joints']
+            right_joints = step_data['right_joints']
+            left_gripper = step_data['left_gripper']
+            right_gripper = step_data['right_gripper']
+        else:
+            base_vel = np.array([0.0, 0.0, 0.0])
+            # Fallback to home position
+            left_joints = [0, 0, 0, 0, 0, 0]
+            right_joints = [0, 0, 0, 0, 0, 0]
+            left_gripper = 0.035  # Open
+            right_gripper = 0.035  # Open
+        
+        # Normalize gripper positions (0-1 range)
+        from constants import PIPER_GRIPPER_POSITION_NORMALIZE_FN
+        left_gripper_normalized = PIPER_GRIPPER_POSITION_NORMALIZE_FN(left_gripper) if left_gripper is not None else 1.0
+        right_gripper_normalized = PIPER_GRIPPER_POSITION_NORMALIZE_FN(right_gripper) if right_gripper is not None else 1.0
+        
+        # Build action: [vx, vy, omega, left_arm_joints(6), left_gripper(1), right_arm_joints(6), right_gripper(1)]
+        action = np.concatenate([
+            base_vel,
+            left_joints,
+            [left_gripper_normalized],
+            right_joints,
+            [right_gripper_normalized]
+        ])
+        
+        self.step_count += 1
+        return action
