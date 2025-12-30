@@ -221,20 +221,22 @@ class MobileDualPiperTaskPiper():
     @staticmethod
     def get_qvel(data):
         qvel_raw = data.qvel.copy()
+        base_qvel = qvel_raw[:3]
         left_arm_qvel = qvel_raw[3:9]
         right_arm_qvel = qvel_raw[10:16]
         left_gripper_qvel = [PIPER_GRIPPER_VELOCITY_NORMALIZE_FN(qvel_raw[6])]
         right_gripper_qvel = [PIPER_GRIPPER_VELOCITY_NORMALIZE_FN(qvel_raw[13])]
-        return np.concatenate([left_arm_qvel, left_gripper_qvel, right_arm_qvel, right_gripper_qvel])
+        return np.concatenate([base_qvel, left_arm_qvel, left_gripper_qvel, right_arm_qvel, right_gripper_qvel])
 
     @staticmethod
     def get_qtor(data):
         qtor_raw = data.actuator_force.copy()
+        base_qtor = qtor_raw[:3]
         left_arm_qtor = qtor_raw[3:9]
         right_arm_qtor = qtor_raw[10:16]
         left_gripper_qtor = qtor_raw[6]
         right_gripper_qtor = qtor_raw[13]
-        return np.concatenate([left_arm_qtor, left_gripper_qtor, right_arm_qtor, right_gripper_qtor])
+        return np.concatenate([base_qtor, left_arm_qtor, left_gripper_qtor, right_arm_qtor, right_gripper_qtor])
 
     @staticmethod
     def get_env_state(data):
@@ -261,3 +263,33 @@ class MobileDualPiperTaskPiper():
             obs['images']['left'] = np.random.randint(0, 255, (480, 640, 3))
             obs['images']['right'] = np.random.randint(0, 255, (480, 640, 3))
         return obs
+
+    def get_reward(self, model, data):
+        all_contact_pairs = []
+        for i_contact in range(data.ncon):
+            id_geom_1 = data.contact[i_contact].geom1
+            id_geom_2 = data.contact[i_contact].geom2
+            name_geom_1 = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, id_geom_1)
+            name_geom_2 = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, id_geom_2)
+            contact_pair = (name_geom_1, name_geom_2)
+            all_contact_pairs.append(contact_pair)
+
+        # For piper robots, check contact with either gripper finger (link7 or link8)
+        touch_left_gripper = ("red_box", "piper_left/7_link7") in all_contact_pairs or \
+                            ("red_box", "piper_left/8_link8") in all_contact_pairs or \
+                            ("piper_left/7_link7", "red_box") in all_contact_pairs or \
+                            ("piper_left/8_link8", "red_box") in all_contact_pairs
+
+        touch_left_column = ("red_box", "pick_target_column") in all_contact_pairs or ("pick_target_column", "red_box") in all_contact_pairs
+        touch_right_column = ("red_box", "place_target_column") in all_contact_pairs or ("place_target_column", "red_box") in all_contact_pairs
+
+        reward = 0
+        if touch_left_column:
+            reward = 1
+        if touch_left_gripper: # grasped
+            reward = 2
+        if touch_right_column: # attempted transfer
+            reward = 3
+        if touch_right_column and not touch_left_gripper: # successful transfer
+            reward = 4
+        return reward

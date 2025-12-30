@@ -50,8 +50,6 @@ while env.viewer.is_running():
     # print(ts.observation["qpos"].shape)
     # time.sleep(DT)
     t += DT
-    if t >= 500 * DT:
-        print("break point")
 
 # # Generate scan pattern
 # rays_theta, rays_phi = scan_gen.generate_grid_scan_pattern(num_ray_cols=64, num_ray_rows=16)

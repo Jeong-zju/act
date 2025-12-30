@@ -356,6 +356,7 @@ class MobileDualPiperEnvironment:
         self.viewer.sync()
 
         observation = self.task.get_observation(self.data, renderer=self.renderer)
-        reward = 0
-        ts = SimpleNamespace(observation=observation, reward=0, action=action)
+        observation['qpos'][:3] = self.odom_x, self.odom_y, self.odom_yaw
+        reward = self.task.get_reward(self.model, self.data)
+        ts = SimpleNamespace(observation=observation, reward=reward, action=action)
         return ts

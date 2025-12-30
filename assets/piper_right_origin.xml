@@ -29,7 +29,7 @@
                                 <body name="piper_right/gripper_base" pos="0 0 0">
                                     <inertial pos="-0.000183807162235591 8.05033155577911E-05 0.0321436689908876" quat="0 0 0 1" mass="0.45" diaginertia="0.00092944 0.00071447 0.00039432" />
                                     <geom type="mesh" mesh="piper_gripper_base" name="piper_right/gripper_base" />
-                                    <camera name="right_cam" pos="-0.075 0 0.05" euler="0 3.5 -1.5708" fovy="78"/>
+                                    <camera name="right_cam" pos="-0.15 0 0.05" euler="0 4.0 -1.5708" fovy="78"/>
                                     <body name="piper_right/link7" pos="0 0 0.1358" quat="0.7071054825112363 0.7071080798594735 0.0 0.0">
                                         <inertial pos="0.00065123185041968 -0.0491929869131989 0.00972258769184025" quat="0 0 0 1" mass="0.025" diaginertia="7.74531449e-05 7.36782567e-05 5.08859839e-06" />
                                         <joint name="piper_right/joint7" pos="0 0 0" axis="0 0 1" type="slide" limited="true" range="0 0.035" frictionloss="5" damping="2" />
