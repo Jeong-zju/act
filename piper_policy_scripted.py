@@ -576,17 +576,6 @@ class MobileDualPiperPickAndTransferPolicyPiper(PickAndTransferPolicyPiper):
         cube_quat = env_state[3:7]  # [w, x, y, z] format
         world2cube_mat = self.pose_to_matrix(cube_xyz, cube_quat)
         
-        # Column positions (from XML)
-        # pick_column_xyz = np.array([1.0, 1.0, 0.5])
-        # place_column_xyz = np.array([1.0, -1.0, 0.5])
-        
-        # Calculate robot base (mobile_base) positions
-        # mobile_base is at [0, 0, 0.3] in world when at origin
-        # left_mount is at [0.26, 0.28, 0.57] relative to mobile_base
-        # arm base_link (piper_left/base_link) is at [0, 0, 0] relative to left_mount
-        # So arm_base_link world position = mobile_base_world + [0.26, 0.28, 0.57] + [0, 0, 0.3] (mobile_base z offset)
-        # For base_yaw = 0: arm_base_link = [base_x + 0.26, base_y + 0.28, 0.3 + 0.57] = [base_x + 0.26, base_y + 0.28, 0.87]
-        
         left_mount_offset = np.array([0.26, 0.28, 0.57])  # Relative to mobile_base
         base2left_mat = self.pose_to_matrix(left_mount_offset, np.array([1.0, 0.0, 0.0, 0.0]))
 
@@ -608,69 +597,11 @@ class MobileDualPiperPickAndTransferPolicyPiper(PickAndTransferPolicyPiper):
         place_left_xyz = np.array([place_left2cube_mat[0, 3], place_left2cube_mat[1, 3], place_left2cube_mat[2, 3]])
         place_left_quat_scipy = R.from_matrix(place_left2cube_mat[:3, :3]).as_quat()
         place_left_quat = np.array([place_left_quat_scipy[3], place_left_quat_scipy[0], place_left_quat_scipy[1], place_left_quat_scipy[2]])  # Convert to [w, x, y, z]
-
-
-
-
-
-
-        
-        # Calculate robot base positions to allow left arm to reach cube
-        # We want arm_base_link to be positioned so arm can reach cube
-        # For simplicity, assume base_yaw = 0 (no rotation)
-        
         
         # Gripper values
         gripper_close = 0.005
         gripper_open = 0.035
         
-        # # Define desired gripper orientations in world frame
-        # cube_reach_euler = (0, np.pi, 0)  # For left arm reaching to cube
-        # cube_reach_quat_scipy = R.from_euler('xyz', cube_reach_euler).as_quat()  # [x, y, z, w]
-        # cube_reach_quat_world = np.array([cube_reach_quat_scipy[3], cube_reach_quat_scipy[0], cube_reach_quat_scipy[1], cube_reach_quat_scipy[2]])  # Convert to [w, x, y, z]
-        
-        # # Place orientation (same as cube_reach)
-        # place_quat_world = cube_reach_quat_world
-        
-        # # Transform cube pose to ARM BASE FRAME (piper_left/base_link) at pick position
-        # # Arm base_link world position when robot base is at pick position:
-        # arm_base_pick_world_pos = np.array([
-        #     base_pick_x + left_mount_offset[0],
-        #     base_pick_y + left_mount_offset[1],
-        #     mobile_base_z_offset + left_mount_offset[2]
-        # ])
-        # arm_base_pick_world_quat = np.array([np.cos(base_pick_yaw/2), 0, 0, np.sin(base_pick_yaw/2)])
-        # world2arm_base_pick_mat = self.pose_to_matrix(arm_base_pick_world_pos, arm_base_pick_world_quat)
-        
-        # # Desired gripper pose in world frame: cube position + desired orientation
-        # cube_gripper_world_mat = self.pose_to_matrix(cube_xyz, cube_reach_quat_world)
-        # # Transform to arm base frame
-        # arm_base2cube_gripper_mat = np.linalg.inv(world2arm_base_pick_mat) @ cube_gripper_world_mat
-        # cube_arm_base_xyz = arm_base2cube_gripper_mat[:3, 3]
-        # cube_arm_base_quat_scipy = R.from_matrix(arm_base2cube_gripper_mat[:3, :3]).as_quat()
-        # cube_arm_base_quat = np.array([cube_arm_base_quat_scipy[3], cube_arm_base_quat_scipy[0], cube_arm_base_quat_scipy[1], cube_arm_base_quat_scipy[2]])
-        
-        # # Transform place pose to ARM BASE FRAME at place position
-        # arm_base_place_world_pos = np.array([
-        #     base_place_x + left_mount_offset[0],
-        #     base_place_y + left_mount_offset[1],
-        #     mobile_base_z_offset + left_mount_offset[2]
-        # ])
-        # arm_base_place_world_quat = np.array([np.cos(base_place_yaw/2), 0, 0, np.sin(base_place_yaw/2)])
-        # world2arm_base_place_mat = self.pose_to_matrix(arm_base_place_world_pos, arm_base_place_world_quat)
-        
-        # # Place target position (on top of column) with desired orientation
-        # place_target_xyz = place_column_xyz + np.array([0, 0, 0.1])  # 10cm above column
-        # place_target_world_mat = self.pose_to_matrix(place_target_xyz, place_quat_world)
-        # arm_base2place_mat = np.linalg.inv(world2arm_base_place_mat) @ place_target_world_mat
-        # place_arm_base_xyz = arm_base2place_mat[:3, 3]
-        # place_arm_base_quat_scipy = R.from_matrix(arm_base2place_mat[:3, :3]).as_quat()
-        # place_arm_base_quat = np.array([place_arm_base_quat_scipy[3], place_arm_base_quat_scipy[0], place_arm_base_quat_scipy[1], place_arm_base_quat_scipy[2]])
-        
-        # Left arm waypoints (in ARM BASE FRAME - piper_left/base_link)
-        # Timing: Robot base reaches pick at t=400, arm grasps t=400-600, robot base moves to place t=600-1000, arm places t=1000-1200
-        # Note: During robot base movement (t=600-1000), arm maintains lifted position
-        # The waypoint at t=1000 assumes robot base is at place position
         self.left_trajectory = [
             {"t": 0, "joint": [0, 0, 0, 0, 0, 0], "gripper": gripper_open},
             {"t": 400, "xyz": pick_left_xyz + np.array([-0.2, 0, 0]), "quat": pick_left_quat, "gripper": gripper_open},  # Approach cube (in arm base frame)
