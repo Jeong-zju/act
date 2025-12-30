@@ -7,7 +7,7 @@ import os
 sys.path.append(os.path.dirname(__file__))
 
 from piper_sim_task import TransferCubeTaskPiper, InsertionTaskPiper, MobileDualPiperTaskPiper
-from constants import DT, PIPER_GRIPPER_POSITION_UNNORMALIZE_FN
+from constants import DT, PIPER_GRIPPER_POSITION_UNNORMALIZE_FN, PIPER_GRIPPER_POSITION_OPEN
 
 import mujoco
 import mujoco.viewer
@@ -140,25 +140,136 @@ class MobileDualPiperEnvironment:
         self.odom_y = 0.0
         self.odom_yaw = 0.0
 
+        # Stabilization parameters
+        self.stabilization_steps = 1000  # Maximum steps to wait for stabilization
+        self.velocity_threshold = 0.01  # Velocity threshold for considering stable
+        self.viewer_update_interval = 10  # Update viewer every N steps
+
+        # Pose interpolation parameters
+        self.interpolation_steps = 50  # Number of steps for pose interpolation
+
     def reset(self):
-        """Reset environment and clear odometry to zero"""
+        """Reset environment and set robot base to sampled initial pose"""
         mujoco.mj_resetDataKeyframe(self.model, self.data, 0)
 
-        # Reset odometry tracking
-        self.odom_x = 0.0
-        self.odom_y = 0.0
-        self.odom_yaw = 0.0
+        # Generate random initial position within U-shape map bounds
+        # U-shape map valid area: x: -1.1 to 3.1, y: -3.1 to 1.9
+        x_min, x_max = -0.6, 0.0
+        y_min, y_max = 0.6, 1.6
 
-        # Set mocap to zero position and orientation
-        np.copyto(self.data.mocap_pos[self.mocap_id], [0.0, 0.0, self.base_z])
-        np.copyto(self.data.mocap_quat[self.mocap_id], [1.0, 0.0, 0.0, 0.0])  # [w, x, y, z] - no rotation
+        # Sample random initial position
+        init_x = np.random.uniform(x_min, x_max)
+        init_y = np.random.uniform(y_min, y_max)
+        init_yaw = 0.0  # Keep yaw at 0 for simplicity
 
-        mujoco.mj_step(self.model, self.data)
-        self.viewer.sync()
+        print(f"Environment reset: sampled initial pose ({init_x:.3f}, {init_y:.3f}, {init_yaw:.3f})")
+
+        # Get current pose after keyframe reset
+        current_pos = self.data.mocap_pos[self.mocap_id].copy()
+        current_quat = self.data.mocap_quat[self.mocap_id].copy()
+
+        # Target pose
+        target_pos = np.array([init_x, init_y, self.base_z])
+        quat_w = np.cos(init_yaw / 2.0)
+        quat_z = np.sin(init_yaw / 2.0)
+        target_quat = np.array([quat_w, 0.0, 0.0, quat_z])
+
+        # Linearly interpolate to target pose to avoid instability
+        self._interpolate_to_pose(current_pos, current_quat, target_pos, target_quat)
+
+        # Update odometry tracking to final position
+        self.odom_x = init_x
+        self.odom_y = init_y
+        self.odom_yaw = init_yaw
+
+        # Wait for robot to stabilize
+        self._wait_for_stabilization()
 
         observation = self.task.get_observation(self.data, renderer=self.renderer)
         ts = SimpleNamespace(observation=observation, reward=0, action=np.zeros(17))
         return ts
+
+    def _wait_for_stabilization(self):
+        """Wait for the robot (base, arms, gripper) to stabilize after pose reset"""
+        print("Waiting for robot stabilization...")
+
+        for step in range(self.stabilization_steps):
+            # Send control commands: arms to zero, grippers open
+            self._send_reset_control_commands()
+
+            # Step the simulation
+            mujoco.mj_step(self.model, self.data)
+
+            # Update viewer periodically for visualization
+            if step % self.viewer_update_interval == 0:
+                self.viewer.sync()
+
+            # Check if velocities are below threshold (indicating stabilization)
+            # Check maximum absolute velocity across all joints
+            max_velocity = np.max(np.abs(self.data.qvel))
+
+            if max_velocity < self.velocity_threshold:
+                print(f"Robot stabilized after {step+1} steps (max velocity: {max_velocity:.6f})")
+                break
+        else:
+            print(f"Robot did not fully stabilize within {self.stabilization_steps} steps "
+                  f"(final max velocity: {max_velocity:.6f})")
+
+        # Final viewer sync
+        self.viewer.sync()
+
+    def _interpolate_to_pose(self, start_pos, start_quat, target_pos, target_quat):
+        """Linearly interpolate from start pose to target pose over several steps"""
+        print("Interpolating to target pose...")
+
+        for step in range(self.interpolation_steps):
+            # Linear interpolation factor (0 to 1)
+            t = (step + 1) / self.interpolation_steps
+
+            # Interpolate position
+            current_pos = start_pos + t * (target_pos - start_pos)
+
+            # Interpolate quaternion (simplified - for small rotations around z-axis)
+            # For more complex rotations, would need proper quaternion interpolation
+            current_quat = start_quat + t * (target_quat - start_quat)
+            # Normalize quaternion
+            current_quat = current_quat / np.linalg.norm(current_quat)
+
+            # Set mocap to interpolated pose
+            np.copyto(self.data.mocap_pos[self.mocap_id], current_pos)
+            np.copyto(self.data.mocap_quat[self.mocap_id], current_quat)
+
+            # Send control commands: arms to zero, grippers open
+            self._send_reset_control_commands()
+
+            # Step simulation
+            mujoco.mj_step(self.model, self.data)
+
+            # Update viewer occasionally
+            if step % 10 == 0:
+                self.viewer.sync()
+
+        # Final viewer sync
+        self.viewer.sync()
+        print("Pose interpolation complete")
+
+    def _send_reset_control_commands(self):
+        """Send control commands during reset: arms to zero, grippers open"""
+        reset_ctrl = np.array([
+            # Left arm joints (6 joints) - all zero for home position
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            # Left gripper - normalized open position (1.0)
+            PIPER_GRIPPER_POSITION_OPEN,
+            -PIPER_GRIPPER_POSITION_OPEN,
+            # Right arm joints (6 joints) - all zero for home position
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            # Right gripper - normalized open position (1.0)
+            PIPER_GRIPPER_POSITION_OPEN,
+            -PIPER_GRIPPER_POSITION_OPEN,
+        ])
+
+        # Apply control
+        self.data.ctrl[:] = reset_ctrl
 
     def step(self, action):
         """Step the environment with given action

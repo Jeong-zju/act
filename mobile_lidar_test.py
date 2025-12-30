@@ -43,13 +43,15 @@ while env.viewer.is_running():
     plt_img_left.set_data(ts.observation['images']['left'])
     plt_img_right.set_data(ts.observation['images']['right'])
     plt.pause(0.0001)
-    print("=" * 50)
-    print(f"Time: {t:.3f}s")
-    print(ts.observation["qpos"][:3])
-    print(ts.observation["qvel"][:3])
-    print(ts.observation["qpos"].shape)
-    time.sleep(DT)
+    # print("=" * 50)
+    # print(f"Time: {t:.3f}s")
+    # print(ts.observation["qpos"][:3])
+    # print(ts.observation["qvel"][:3])
+    # print(ts.observation["qpos"].shape)
+    # time.sleep(DT)
     t += DT
+    if t >= 500 * DT:
+        print("break point")
 
 # # Generate scan pattern
 # rays_theta, rays_phi = scan_gen.generate_grid_scan_pattern(num_ray_cols=64, num_ray_rows=16)
