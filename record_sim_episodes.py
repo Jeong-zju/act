@@ -124,10 +124,10 @@ def main(args):
         observations
         - images
             - each_cam_name     (480, 640, 3) 'uint8'
-        - qpos                  (14,)         'float64'
-        - qvel                  (14,)         'float64'
+        - qpos                  (17,)         'float64'
+        - qvel                  (17,)         'float64'
 
-        action                  (14,)         'float64'
+        action                  (17,)         'float64'
         """
 
         data_dict = {
@@ -167,9 +167,9 @@ def main(args):
                                          chunks=(1, 480, 640, 3), )
             # compression='gzip',compression_opts=2,)
             # compression=32001, compression_opts=(0, 0, 0, 0, 9, 1, 1), shuffle=False)
-            qpos = obs.create_dataset('qpos', (max_timesteps, 14))
-            qvel = obs.create_dataset('qvel', (max_timesteps, 14))
-            action = root.create_dataset('action', (max_timesteps, 14))
+            qpos = obs.create_dataset('qpos', (max_timesteps, 17))
+            qvel = obs.create_dataset('qvel', (max_timesteps, 17))
+            action = root.create_dataset('action', (max_timesteps, 17))
 
             for name, array in data_dict.items():
                 root[name][...] = array

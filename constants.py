@@ -61,9 +61,16 @@ SIM_TASK_CONFIGS = {
 
     'sim_insertion_piper_torque':{
         'dataset_dir': DATA_DIR + '/sim_insertion_piper_torque',
-        'num_episodes': 30,
+        'num_episodes': 50,
         'episode_len': 500,
         'camera_names': ['top']
+    },
+
+    'sim_mobile_transfer_cube':{
+        'dataset_dir': DATA_DIR + '/sim_mobile_transfer_cube',
+        'num_episodes': 50,
+        'episode_len': 1500,
+        'camera_names': ['top', 'left']
     },
 }
 

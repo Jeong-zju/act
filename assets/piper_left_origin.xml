@@ -33,12 +33,12 @@
                                     <body name="piper_left/link7" pos="0 0 0.1358" quat="0.7071054825112363 0.7071080798594735 0.0 0.0">
                                         <inertial pos="0.00065123185041968 -0.0491929869131989 0.00972258769184025" quat="0 0 0 1" mass="0.025" diaginertia="7.74531449e-05 7.36782567e-05 5.08859839e-06" />
                                         <joint name="piper_left/joint7" pos="0 0 0" axis="0 0 1" type="slide" limited="true" range="0 0.035" frictionloss="0.1" damping="1" />
-                                        <geom type="mesh" mesh="piper_link7" name="piper_left/7_link7" />
+                                        <geom type="mesh" mesh="piper_link7" name="piper_left/7_link7" solimp="2 1 0.01" solref="0.01 1" friction="1 1 0.0001"/>
                                     </body>
                                     <body name="piper_left/link8" pos="0 0 0.1358" quat="-2.5973434669646147e-06 -2.597353007557415e-06 -0.7071080798547033 -0.707105482506466">
                                         <inertial pos="0.000651231850419722 -0.0491929869131991 0.00972258769184024" quat="0 0 0 1" mass="0.025" diaginertia="7.74531449e-05 7.36782567e-05 5.08859839e-06" />
                                         <joint name="piper_left/joint8" pos="0 0 0" axis="0 0 -1" type="slide" limited="true" range="-0.035 0" frictionloss="0.1" damping="1" />
-                                        <geom type="mesh" mesh="piper_link8" name="piper_left/8_link8" />
+                                        <geom type="mesh" mesh="piper_link8" name="piper_left/8_link8" solimp="2 1 0.01" solref="0.01 1" friction="1 1 0.0001"/>
                                     </body>
                                 </body>
                             </body>

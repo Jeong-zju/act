@@ -762,9 +762,9 @@ class MobileDualPiperPickAndTransferPolicyPiper(PickAndTransferPolicyPiper):
         ]
 
         self.astar_planner = AStarPlanner(
-            grid_size=0.05,  # 5cm分辨率
-            grid_width=80,   # 4m x 4m 地图
-            grid_height=80,
+            grid_size=0.01,  # 1cm分辨率
+            grid_width=400,   # 4m x 4m 地图
+            grid_height=400,
             obstacles=obstacles
         )
         
@@ -839,14 +839,14 @@ class MobileDualPiperPickAndTransferPolicyPiper(PickAndTransferPolicyPiper):
 
         self.left_trajectory = [
             {"t": 0, "joint": [0, 0, 0, 0, 0, 0], "gripper": gripper_open},
-            {"t": 300, "joint": [0, 0, 0, 0, 0, 0], "gripper": gripper_open},
-            # {"t": 400, "xyz": pick_left_xyz + np.array([-0.3, 0, 0]), "quat": pick_left_quat, "gripper": gripper_open},  # Approach cube (in arm base frame)
+            {"t": 200, "joint": [0, 0, 0, 0, 0, 0], "gripper": gripper_open},
+            {"t": 400, "xyz": pick_left_xyz + np.array([-0.11, 0, 0.1]), "quat": pick_left_quat, "gripper": gripper_open},  # Approach cube (in arm base frame)
             {"t": 500, "xyz": pick_left_xyz + np.array([-0.11, 0, 0]), "quat": pick_left_quat, "gripper": gripper_open},  # Reach cube (in arm base frame)
             # {"t": 550, "xyz": pick_left_xyz + np.array([-0.125, 0, 0]), "quat": pick_left_quat, "gripper": gripper_open},  # Grasp (in arm base frame)
             {"t": 600, "xyz": pick_left_xyz + np.array([-0.11, 0, 0]), "quat": pick_left_quat, "gripper": gripper_close},  # Grasp (in arm base frame)
             {"t": 1000, "joint": [0, 0, 0, 0, 0, 0], "gripper": gripper_close},  # Return to home
-            {"t": 1200, "xyz": place_left_xyz + np.array([-0.125, 0, 0]), "quat": place_left_quat, "gripper": gripper_close},  # Reach cube (in arm base frame)
-            {"t": 1300, "xyz": place_left_xyz + np.array([-0.125, 0, 0]), "quat": place_left_quat, "gripper": gripper_open},  # Reach cube (in arm base frame)
+            {"t": 1300, "xyz": place_left_xyz + np.array([-0.11, 0, 0]), "quat": place_left_quat, "gripper": gripper_close},  # Reach cube (in arm base frame)
+            {"t": 1400, "xyz": place_left_xyz + np.array([-0.11, 0, 0]), "quat": place_left_quat, "gripper": gripper_open},  # Reach cube (in arm base frame)
             {"t": 1500, "joint": [0, 0, 0, 0, 0, 0], "gripper": gripper_open},  # Return to home
         ]
 
@@ -887,7 +887,7 @@ class MobileDualPiperPickAndTransferPolicyPiper(PickAndTransferPolicyPiper):
         # 1500-2000: 在放置位置等待
 
         # 阶段1: 从初始位置移动到拾取位置 (0-400 时间步)
-        move_to_pick_duration = 400  # 时间步
+        move_to_pick_duration = 200  # 时间步
         if len(path_to_pick) > 1:
             # 在路径点之间均匀分配时间
             time_per_segment = move_to_pick_duration / (len(path_to_pick) - 1)
@@ -900,14 +900,14 @@ class MobileDualPiperPickAndTransferPolicyPiper(PickAndTransferPolicyPiper):
         else:
             # 如果路径规划失败，使用直接路径
             base_trajectory.append({"t": 0, "base": base_init})
-            base_trajectory.append({"t": 400, "base": base_pick})
+            base_trajectory.append({"t": 200, "base": base_pick})
 
-        # 阶段2: 在拾取位置等待 (400-600)
+        # 阶段2: 在拾取位置等待 (200-600)
         base_trajectory.append({"t": 600, "base": base_pick})
 
         # 阶段3: 从拾取位置移动到放置位置 (600-1000)
         move_to_place_start = 600
-        move_to_place_duration = 400  # 1000 - 600
+        move_to_place_duration = 600  # 1000 - 600
         if len(path_to_place) > 1:
             time_per_segment = move_to_place_duration / (len(path_to_place) - 1)
             for i, (x, y) in enumerate(path_to_place):
@@ -919,10 +919,10 @@ class MobileDualPiperPickAndTransferPolicyPiper(PickAndTransferPolicyPiper):
         else:
             # 如果路径规划失败，使用直接路径
             base_trajectory.append({"t": 600, "base": base_pick})
-            base_trajectory.append({"t": 1000, "base": base_place})
+            base_trajectory.append({"t": 1200, "base": base_place})
 
-        # 阶段4-6: 在放置位置等待和操作 (1000-2000)
-        base_trajectory.append({"t": 1400, "base": base_place})
+        # 阶段4-6: 在放置位置等待和操作 (1200-2000)
+        # base_trajectory.append({"t": 1400, "base": base_place})
         base_trajectory.append({"t": 1500, "base": base_place})
         base_trajectory.append({"t": 2000, "base": base_place})
 
@@ -940,38 +940,6 @@ class MobileDualPiperPickAndTransferPolicyPiper(PickAndTransferPolicyPiper):
 
         print(f"生成的基座轨迹包含 {len(unique_trajectory)} 个waypoints")
         return unique_trajectory
-
-    # def generate_random_initial_position(self):
-    #     """
-    #     在U形地图的有效区域内生成随机初始位置
-    #     注意：此方法已废弃，现在由环境负责生成随机初始位置
-    #     """
-    #     pass
-
-    # def update_obstacles_from_env(self, env_state):
-    #     """
-    #     根据环境状态动态更新障碍物信息
-
-    #     Args:
-    #         env_state: 环境状态，包含物体位置信息
-    #     """
-    #     obstacles = []
-
-    #     # 示例：根据env_state添加障碍物
-    #     # 这里可以根据你的环境状态格式来调整
-    #     if isinstance(env_state, dict):
-    #         # 如果env_state是字典格式
-    #         if 'obstacles' in env_state:
-    #             for obs in env_state['obstacles']:
-    #                 obstacles.append((obs['x'], obs['y'], obs.get('radius', 0.1)))
-    #     elif isinstance(env_state, (list, np.ndarray)):
-    #         # 如果env_state是数组格式，可以根据需要解析
-    #         # 示例：假设env_state包含多个物体的位置
-    #         pass
-
-    #     # 更新A*规划器的障碍物
-    #     self.astar_planner.obstacles = obstacles
-    #     print(f"更新了 {len(obstacles)} 个障碍物")
 
     def precompute_trajectory(self, ts_first):
         self.precompute_joint_trajectory(ts_first)
@@ -1044,4 +1012,7 @@ class MobileDualPiperPickAndTransferPolicyPiper(PickAndTransferPolicyPiper):
         ])
         
         self.step_count += 1
+        if self.step_count >= len(self.precomputed_trajectory):
+            self.step_count = 0
+
         return action

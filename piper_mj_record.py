@@ -958,11 +958,11 @@ if __name__ == "__main__":
             obs = root.create_group('observations')
             image = obs.create_group('images')
             image.create_dataset('top', (max_timesteps, 480, 640, 3), dtype='uint8', chunks=(1, 480, 640, 3))
-            qpos = obs.create_dataset('qpos', (max_timesteps, 14))
-            qvel = obs.create_dataset('qvel', (max_timesteps, 14))
+            qpos = obs.create_dataset('qpos', (max_timesteps, 17))
+            qvel = obs.create_dataset('qvel', (max_timesteps, 17))
             if args.enable_torque:
-                qtor = obs.create_dataset('qtor', (max_timesteps, 14))
-            action = root.create_dataset('action', (max_timesteps, 14))
+                qtor = obs.create_dataset('qtor', (max_timesteps, 17))
+            action = root.create_dataset('action', (max_timesteps, 17))
             reward = root.create_dataset('reward', (max_timesteps,))
             timestamp = root.create_dataset('timestamp', (max_timesteps,))
 

@@ -83,6 +83,7 @@ class EpisodicDataset(torch.utils.data.Dataset):
         # construct observations
         image_data = torch.from_numpy(all_cam_images)
         qpos_data = torch.from_numpy(qpos).float()
+        qvel_data = torch.from_numpy(qvel).float()
         qtor_data = torch.from_numpy(qtor).float()
         action_data = torch.from_numpy(padded_action).float()
         is_pad = torch.from_numpy(is_pad).bool()
@@ -94,6 +95,7 @@ class EpisodicDataset(torch.utils.data.Dataset):
         image_data = image_data / 255.0
         action_data = (action_data - self.norm_stats["action_mean"]) / self.norm_stats["action_std"]
         qpos_data = (qpos_data - self.norm_stats["qpos_mean"]) / self.norm_stats["qpos_std"]
+        qvel_data = (qvel_data - self.norm_stats["qvel_mean"]) / self.norm_stats["qvel_std"]
         # normalize qtor if stats available, otherwise use raw values
         if "qtor_mean" in self.norm_stats and "qtor_std" in self.norm_stats:
             qtor_data = (qtor_data - self.norm_stats["qtor_mean"]) / self.norm_stats["qtor_std"]
@@ -101,7 +103,7 @@ class EpisodicDataset(torch.utils.data.Dataset):
             # if no normalization stats, use raw values (assumes already normalized or will be handled elsewhere)
             pass
 
-        return image_data, qpos_data, qtor_data, action_data, is_pad
+        return image_data, qpos_data, qvel_data, qtor_data, action_data, is_pad
 
 
 def get_norm_stats(dataset_dir, num_episodes):
@@ -116,6 +118,7 @@ def get_norm_stats(dataset_dir, num_episodes):
         return p1
 
     all_qpos_data = []
+    all_qvel_data = []
     all_qtor_data = []
     all_action_data = []
     example_qpos = None
@@ -124,6 +127,7 @@ def get_norm_stats(dataset_dir, num_episodes):
         dataset_path = _episode_hdf5_path(episode_idx)
         with h5py.File(dataset_path, "r") as root:
             qpos = root["/observations/qpos"][()]
+            qvel = root["/observations/qvel"][()]
             action = root["/action"][()]
             if '/observations/qtor' in root:
                 qtor = root["/observations/qtor"][()]
@@ -131,12 +135,14 @@ def get_norm_stats(dataset_dir, num_episodes):
             else:
                 qtor = np.zeros_like(qpos)
         all_qpos_data.append(torch.from_numpy(qpos))
+        all_qvel_data.append(torch.from_numpy(qvel))
         all_qtor_data.append(torch.from_numpy(qtor))
         all_action_data.append(torch.from_numpy(action))
         example_qpos = qpos
 
     # Episodes can have different lengths, so concatenate along time.
     all_qpos_data = torch.cat(all_qpos_data, dim=0)
+    all_qvel_data = torch.cat(all_qvel_data, dim=0)
     all_action_data = torch.cat(all_action_data, dim=0)
     all_qtor_data = torch.cat(all_qtor_data, dim=0)
 
@@ -150,11 +156,17 @@ def get_norm_stats(dataset_dir, num_episodes):
     qpos_std = all_qpos_data.std(dim=0, keepdim=True, unbiased=False)
     qpos_std = torch.clip(qpos_std, 1e-2, np.inf)  # clipping
 
+    qvel_mean = all_qvel_data.mean(dim=0, keepdim=True)
+    qvel_std = all_qvel_data.std(dim=0, keepdim=True, unbiased=False)
+    qvel_std = torch.clip(qvel_std, 1e-2, np.inf)  # clipping
+
     stats = {
         "action_mean": action_mean.numpy().squeeze(),
         "action_std": action_std.numpy().squeeze(),
         "qpos_mean": qpos_mean.numpy().squeeze(),
         "qpos_std": qpos_std.numpy().squeeze(),
+        "qvel_mean": qvel_mean.numpy().squeeze(),
+        "qvel_std": qvel_std.numpy().squeeze(),
         "example_qpos": example_qpos,
     }
     

@@ -47,7 +47,7 @@ def main(args):
     camera_names = task_config['camera_names']
 
     # fixed parameters
-    state_dim = 14
+    state_dim = 17
     lr_backbone = 1e-5
     backbone = 'resnet18'
     if policy_class == 'ACT':
@@ -330,8 +330,11 @@ def eval_bc(config, ckpt_name, save_episode=True):
 
 
 def forward_pass(data, policy):
-    image_data, qpos_data, qtor_data, action_data, is_pad = data
-    image_data, qpos_data, qtor_data, action_data, is_pad = image_data.cuda(), qpos_data.cuda(), qtor_data.cuda(), action_data.cuda(), is_pad.cuda()
+    image_data, qpos_data, qvel_data, qtor_data, action_data, is_pad = data
+    image_data, qpos_data, qvel_data, qtor_data, action_data, is_pad = image_data.cuda(), qpos_data.cuda(), qvel_data.cuda(), qtor_data.cuda(), action_data.cuda(), is_pad.cuda()
+
+    qpos_data = torch.concatenate([qvel_data[:, :3], qpos_data[:, 3:]], dim=1)
+
     return policy(qpos_data, qtor_data, image_data, action_data, is_pad) # TODO remove None
 
 

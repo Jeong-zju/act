@@ -18,7 +18,8 @@ from visualize_episodes import save_videos
 
 from sim_env import BOX_POSE
 
-from piper_mj_record import PiperCubeTransferEnvironment, TransferCubeTaskPiper, PiperInsertionEnvironment, InsertionTaskPiper
+from piper_sim_env import PiperCubeTransferEnvironment, PiperInsertionEnvironment, MobileDualPiperEnvironment
+from piper_sim_task import TransferCubeTaskPiper, InsertionTaskPiper, MobileDualPiperTaskPiper
 from constants import XML_DIR
 import mujoco
 
@@ -51,7 +52,7 @@ def main(args):
     camera_names = task_config['camera_names']
 
     # fixed parameters
-    state_dim = 14
+    state_dim = 17
     lr_backbone = 1e-5
     backbone = 'resnet18'
     if policy_class == 'ACT':
@@ -94,7 +95,7 @@ def main(args):
 
     if is_eval:
         ckpt_names = [f'policy_best.ckpt']
-        # ckpt_names = [f'policy_epoch_1100_seed_0.ckpt']
+        # ckpt_names = [f'policy_epoch_1400_seed_0.ckpt']
         results = []
         for ckpt_name in ckpt_names:
             success_rate, avg_return = eval_bc(config, ckpt_name, save_episode=False)
@@ -186,6 +187,7 @@ def eval_bc(config, ckpt_name, save_episode=True):
         stats = pickle.load(f)
 
     pre_process = lambda s_qpos: (s_qpos - stats['qpos_mean']) / stats['qpos_std']
+    pre_process_qvel = lambda s_qvel: (s_qvel - stats['qvel_mean']) / stats['qvel_std']
     # Use qtor-specific normalization if available, otherwise fallback to qpos normalization
     if 'qtor_mean' in stats and 'qtor_std' in stats:
         pre_process_qtor = lambda s_qtor: (s_qtor - stats['qtor_mean']) / stats['qtor_std']
@@ -223,6 +225,12 @@ def eval_bc(config, ckpt_name, save_episode=True):
             task = InsertionTaskPiper(enable_qtor=enable_qtor)
             env = PiperInsertionEnvironment(task, model, data)
             env_max_reward = 4
+        elif 'sim_mobile_transfer_cube' in task_name:
+            model = mujoco.MjModel.from_xml_path(os.path.join(XML_DIR, f'mobile_piper.xml'))
+            data = mujoco.MjData(model)
+            task = MobileDualPiperTaskPiper()
+            env = MobileDualPiperEnvironment(model, data, task)
+            env_max_reward = 4
 
     query_frequency = policy_config['num_queries']
     if temporal_agg:
@@ -256,9 +264,12 @@ def eval_bc(config, ckpt_name, save_episode=True):
             all_time_actions = torch.zeros([max_timesteps, max_timesteps+num_queries, state_dim]).cuda()
 
         qpos_history = torch.zeros((1, max_timesteps, state_dim)).cuda()
+        qvel_history = torch.zeros((1, max_timesteps, state_dim)).cuda()
         image_list = [] # for visualization
         qpos_list = []
+        qvel_list = []
         target_qpos_list = []
+        target_qvel_list = []
         rewards = []
         with torch.inference_mode():
             for t in range(max_timesteps):
@@ -276,7 +287,9 @@ def eval_bc(config, ckpt_name, save_episode=True):
                 qpos_numpy = np.array(obs['qpos'])
                 qpos = pre_process(qpos_numpy)
                 qpos = torch.from_numpy(qpos).float().cuda().unsqueeze(0)
-                qpos_history[:, t] = qpos
+                qvel_numpy = np.array(obs['qvel'])
+                qvel = pre_process_qvel(qvel_numpy)
+                qvel = torch.from_numpy(qvel).float().cuda().unsqueeze(0)
                 # get qtor if available, otherwise use zeros
                 if 'qtor' in obs:
                     qtor_numpy = np.array(obs['qtor'])
@@ -289,6 +302,7 @@ def eval_bc(config, ckpt_name, save_episode=True):
                 ### query policy
                 if config['policy_class'] == "ACT":
                     if t % query_frequency == 0:
+                        qpos = torch.concatenate([qvel[:, :3], qpos[:, 3:]], dim=1)
                         all_actions = policy(qpos, qtor, curr_image)
                     if temporal_agg:
                         all_time_actions[[t], t:t+num_queries] = all_actions

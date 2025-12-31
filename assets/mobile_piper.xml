@@ -19,8 +19,12 @@
 
             <geom name="chassis" type="box" size="0.35 0.25 0.05" mass="20"/>
 
-            <body name="shape" pos="0.0 0.0 0.0">
+            <!-- <body name="shape" pos="0.0 0.0 0.0">
                 <geom name="shape" type="sphere" size="0.5" rgba="0 1 0 0.1" mass="10" contype="0" conaffinity="0" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
+            </body> -->
+
+            <body name="lidar_base" pos="0 0 0.06">
+                <site name="lidar_site" size="0.005" rgba="1 0 0 1"/>
             </body>
 
             <camera name="top" pos="0.26 0 1.24" euler="0 -0.785 -1.5708" fovy="120"/>
@@ -47,139 +51,139 @@
 
         <!-- Pick target column -->
         <body name="pick_target" pos="1 1 0.5">
-            <geom name="pick_target_column" type="cylinder" size="0.05 0.5" rgba="0.5 0.5 0.5 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
+            <geom name="pick_target_column" type="cylinder" size="0.05 0.5" rgba="0 0 1 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
         </body>
 
         <!-- Place target column -->
         <body name="place_target" pos="1 -1 0.5">
-            <geom name="place_target_column" type="cylinder" size="0.05 0.5" rgba="0.5 0.5 0.5 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
+            <geom name="place_target_column" type="cylinder" size="0.05 0.5" rgba="0 0 1 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
         </body>
 
         <!-- U-shape Obstacle Map -->
         <body name="behind_wall_1" pos="-1.5 -2.5 0.3">
-            <geom name="behind_wall_1" type="sphere" size="0.3" rgba="0.5 0.5 0.5 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
+            <geom name="behind_wall_1" type="sphere" size="0.3" rgba="0 1 0 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
         </body>
         <body name="behind_wall_2" pos="-1.5 -2.0 0.3">
-            <geom name="behind_wall_2" type="sphere" size="0.3" rgba="0.5 0.5 0.5 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
+            <geom name="behind_wall_2" type="sphere" size="0.3" rgba="0 1 0 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
         </body>
         <body name="behind_wall_3" pos="-1.5 -1.5 0.3">
-            <geom name="behind_wall_3" type="sphere" size="0.3" rgba="0.5 0.5 0.5 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
+            <geom name="behind_wall_3" type="sphere" size="0.3" rgba="0 1 0 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
         </body>
         <body name="behind_wall_4" pos="-1.5 -1.0 0.3">
-            <geom name="behind_wall_4" type="sphere" size="0.3" rgba="0.5 0.5 0.5 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
+            <geom name="behind_wall_4" type="sphere" size="0.3" rgba="0 1 0 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
         </body>
         <body name="behind_wall_5" pos="-1.5 -0.5 0.3">
-            <geom name="behind_wall_5" type="sphere" size="0.3" rgba="0.5 0.5 0.5 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
+            <geom name="behind_wall_5" type="sphere" size="0.3" rgba="0 1 0 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
         </body>
         <body name="behind_wall_6" pos="-1.5 0.0 0.3">
-            <geom name="behind_wall_6" type="sphere" size="0.3" rgba="0.5 0.5 0.5 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
+            <geom name="behind_wall_6" type="sphere" size="0.3" rgba="0 1 0 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
         </body>
         <body name="behind_wall_7" pos="-1.5 0.5 0.3">
-            <geom name="behind_wall_7" type="sphere" size="0.3" rgba="0.5 0.5 0.5 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
+            <geom name="behind_wall_7" type="sphere" size="0.3" rgba="0 1 0 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
         </body>
         <body name="behind_wall_8" pos="-1.5 1.0 0.3">
-            <geom name="behind_wall_8" type="sphere" size="0.3" rgba="0.5 0.5 0.5 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
+            <geom name="behind_wall_8" type="sphere" size="0.3" rgba="0 1 0 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
         </body>
         <body name="behind_wall_9" pos="-1.5 1.5 0.3">
-            <geom name="behind_wall_9" type="sphere" size="0.3" rgba="0.5 0.5 0.5 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
+            <geom name="behind_wall_9" type="sphere" size="0.3" rgba="0 1 0 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
         </body>
         <body name="behind_wall_10" pos="-1.5 2.0 0.3">
-            <geom name="behind_wall_10" type="sphere" size="0.3" rgba="0.5 0.5 0.5 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
+            <geom name="behind_wall_10" type="sphere" size="0.3" rgba="0 1 0 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
         </body>
         <body name="behind_wall_11" pos="-1.5 2.5 0.3">
-            <geom name="behind_wall_11" type="sphere" size="0.3" rgba="0.5 0.5 0.5 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
+            <geom name="behind_wall_11" type="sphere" size="0.3" rgba="0 1 0 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
         </body>
 
         <!-- Right vertical wall -->
         <body name="right_wall_1" pos="-1.5 -2.5 0.3">
-            <geom name="right_wall_1" type="sphere" size="0.3" rgba="0.5 0.5 0.5 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
+            <geom name="right_wall_1" type="sphere" size="0.3" rgba="0 1 0 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
         </body>
         <body name="right_wall_2" pos="-1.0 -2.5 0.3">
-            <geom name="right_wall_2" type="sphere" size="0.3" rgba="0.5 0.5 0.5 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
+            <geom name="right_wall_2" type="sphere" size="0.3" rgba="0 1 0 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
         </body>
         <body name="right_wall_3" pos="-0.5 -2.5 0.3">
-            <geom name="right_wall_3" type="sphere" size="0.3" rgba="0.5 0.5 0.5 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
+            <geom name="right_wall_3" type="sphere" size="0.3" rgba="0 1 0 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
         </body>
         <body name="right_wall_4" pos="0.0 -2.5 0.3">
-            <geom name="right_wall_4" type="sphere" size="0.3" rgba="0.5 0.5 0.5 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
+            <geom name="right_wall_4" type="sphere" size="0.3" rgba="0 1 0 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
         </body>
         <body name="right_wall_5" pos="0.5 -2.5 0.3">
-            <geom name="right_wall_5" type="sphere" size="0.3" rgba="0.5 0.5 0.5 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
+            <geom name="right_wall_5" type="sphere" size="0.3" rgba="0 1 0 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
         </body>
         <body name="right_wall_6" pos="1.0 -2.5 0.3">
-            <geom name="right_wall_6" type="sphere" size="0.3" rgba="0.5 0.5 0.5 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
+            <geom name="right_wall_6" type="sphere" size="0.3" rgba="0 1 0 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
         </body>
         <body name="right_wall_7" pos="1.5 -2.5 0.3">
-            <geom name="right_wall_7" type="sphere" size="0.3" rgba="0.5 0.5 0.5 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
+            <geom name="right_wall_7" type="sphere" size="0.3" rgba="0 1 0 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
         </body>
 
         <!-- Front horizontal wall -->
         <body name="front_wall_1" pos="1.5 -2.5 0.3">
-            <geom name="front_wall_1" type="sphere" size="0.3" rgba="0.5 0.5 0.5 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
+            <geom name="front_wall_1" type="sphere" size="0.3" rgba="0 1 0 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
         </body>
         <body name="front_wall_2" pos="1.5 -2.0 0.3">
-            <geom name="front_wall_2" type="sphere" size="0.3" rgba="0.5 0.5 0.5 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
+            <geom name="front_wall_2" type="sphere" size="0.3" rgba="0 1 0 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
         </body>
         <body name="front_wall_3" pos="1.5 -1.5 0.3">
-            <geom name="front_wall_3" type="sphere" size="0.3" rgba="0.5 0.5 0.5 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
+            <geom name="front_wall_3" type="sphere" size="0.3" rgba="0 1 0 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
         </body>
         <body name="front_wall_4" pos="1.5 -1.0 0.3">
-            <geom name="front_wall_4" type="sphere" size="0.3" rgba="0.5 0.5 0.5 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
+            <geom name="front_wall_4" type="sphere" size="0.3" rgba="0 1 0 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
         </body>
         <body name="front_wall_5" pos="1.5 -0.5 0.3">
-            <geom name="front_wall_5" type="sphere" size="0.3" rgba="0.5 0.5 0.5 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
+            <geom name="front_wall_5" type="sphere" size="0.3" rgba="0 1 0 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
         </body>
         <body name="front_wall_6" pos="1.5 0.0 0.3">
-            <geom name="front_wall_6" type="sphere" size="0.3" rgba="0.5 0.5 0.5 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
+            <geom name="front_wall_6" type="sphere" size="0.3" rgba="0 1 0 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
         </body>
         <body name="front_wall_7" pos="1.5 0.5 0.3">
-            <geom name="front_wall_7" type="sphere" size="0.3" rgba="0.5 0.5 0.5 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
+            <geom name="front_wall_7" type="sphere" size="0.3" rgba="0 1 0 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
         </body>
         <body name="front_wall_8" pos="1.5 1.0 0.3">
-            <geom name="front_wall_8" type="sphere" size="0.3" rgba="0.5 0.5 0.5 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
+            <geom name="front_wall_8" type="sphere" size="0.3" rgba="0 1 0 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
         </body>
         <body name="front_wall_9" pos="1.5 1.5 0.3">
-            <geom name="front_wall_9" type="sphere" size="0.3" rgba="0.5 0.5 0.5 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
+            <geom name="front_wall_9" type="sphere" size="0.3" rgba="0 1 0 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
         </body>
         <body name="front_wall_10" pos="1.5 2.0 0.3">
-            <geom name="front_wall_10" type="sphere" size="0.3" rgba="0.5 0.5 0.5 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
+            <geom name="front_wall_10" type="sphere" size="0.3" rgba="0 1 0 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
         </body>
         <body name="front_wall_11" pos="1.5 2.5 0.3">
-            <geom name="front_wall_11" type="sphere" size="0.3" rgba="0.5 0.5 0.5 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
+            <geom name="front_wall_11" type="sphere" size="0.3" rgba="0 1 0 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
         </body>
 
         <!-- Left vertical wall -->
         <body name="left_wall_1" pos="-1.5 2.5 0.3">
-            <geom name="left_wall_1" type="sphere" size="0.3" rgba="0.5 0.5 0.5 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
+            <geom name="left_wall_1" type="sphere" size="0.3" rgba="0 1 0 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
         </body>
         <body name="left_wall_2" pos="-1.0 2.5 0.3">
-            <geom name="left_wall_2" type="sphere" size="0.3" rgba="0.5 0.5 0.5 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
+            <geom name="left_wall_2" type="sphere" size="0.3" rgba="0 1 0 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
         </body>
         <body name="left_wall_3" pos="-0.5 2.5 0.3">
-            <geom name="left_wall_3" type="sphere" size="0.3" rgba="0.5 0.5 0.5 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
+            <geom name="left_wall_3" type="sphere" size="0.3" rgba="0 1 0 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
         </body>
         <body name="left_wall_4" pos="0.0 2.5 0.3">
-            <geom name="left_wall_4" type="sphere" size="0.3" rgba="0.5 0.5 0.5 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
+            <geom name="left_wall_4" type="sphere" size="0.3" rgba="0 1 0 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
         </body>
         <body name="left_wall_5" pos="0.5 2.5 0.3">
-            <geom name="left_wall_5" type="sphere" size="0.3" rgba="0.5 0.5 0.5 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
+            <geom name="left_wall_5" type="sphere" size="0.3" rgba="0 1 0 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
         </body>
         <body name="left_wall_6" pos="1.0 2.5 0.3">
-            <geom name="left_wall_6" type="sphere" size="0.3" rgba="0.5 0.5 0.5 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
+            <geom name="left_wall_6" type="sphere" size="0.3" rgba="0 1 0 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
         </body>
         <body name="left_wall_7" pos="1.5 2.5 0.3">
-            <geom name="left_wall_7" type="sphere" size="0.3" rgba="0.5 0.5 0.5 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
+            <geom name="left_wall_7" type="sphere" size="0.3" rgba="0 1 0 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
         </body>
 
         <!-- Middle vertical wall -->
         <body name="middle_wall_1" pos="1.0 0.0 0.3">
-            <geom name="middle_wall_1" type="sphere" size="0.1" rgba="0.5 0.5 0.5 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
+            <geom name="middle_wall_1" type="sphere" size="0.1" rgba="0 1 0 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
         </body>
         <body name="middle_wall_2" pos="0.5 0.0 0.3">
-            <geom name="middle_wall_2" type="sphere" size="0.1" rgba="0.5 0.5 0.5 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
+            <geom name="middle_wall_2" type="sphere" size="0.1" rgba="0 1 0 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
         </body>
         <body name="middle_wall_3" pos="0.0 0.0 0.3">
-            <geom name="middle_wall_3" type="sphere" size="0.1" rgba="0.5 0.5 0.5 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
+            <geom name="middle_wall_3" type="sphere" size="0.1" rgba="0 1 0 1" mass="10" contype="1" conaffinity="1" condim="4" solimp="0.9 0.95 0.001" solref="0.02 1"/>
         </body>
 
     </worldbody>
