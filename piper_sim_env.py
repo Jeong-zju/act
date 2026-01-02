@@ -118,12 +118,15 @@ class PiperInsertionEnvironment(PiperCubeTransferEnvironment):
 
 class MobileDualPiperEnvironment:
 
-    def __init__(self, model, data, task):
+    def __init__(self, model, data, task, lidar=None, rays_theta=None, rays_phi=None):
         self.model = model
         self.data = data
         self.viewer = mujoco.viewer.launch_passive(self.model, self.data)
         self.renderer = mujoco.Renderer(model, height=480, width=640)
         self.task: MobileDualPiperTaskPiper = task
+        self.lidar = lidar
+        self.rays_theta = rays_theta
+        self.rays_phi = rays_phi
 
         # Get mocap body ID for base_mocap and find its mocap index
         base_mocap_body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "base_mocap")
@@ -185,7 +188,7 @@ class MobileDualPiperEnvironment:
         # Wait for robot to stabilize
         self._wait_for_stabilization()
 
-        observation = self.task.get_observation(self.data, renderer=self.renderer)
+        observation = self.task.get_observation(self.data, renderer=self.renderer, lidar=self.lidar, rays_theta=self.rays_theta, rays_phi=self.rays_phi)
         ts = SimpleNamespace(observation=observation, reward=0, action=np.zeros(17))
         return ts
 
@@ -355,7 +358,7 @@ class MobileDualPiperEnvironment:
         mujoco.mj_step(self.model, self.data)
         self.viewer.sync()
 
-        observation = self.task.get_observation(self.data, renderer=self.renderer)
+        observation = self.task.get_observation(self.data, renderer=self.renderer, lidar=self.lidar, rays_theta=self.rays_theta, rays_phi=self.rays_phi)
         # observation['qpos'][:3] = self.odom_x, self.odom_y, self.odom_yaw
         reward = self.task.get_reward(self.model, self.data)
         ts = SimpleNamespace(observation=observation, reward=reward, action=action)

@@ -18,82 +18,101 @@ from piper_policy_scripted import MobileDualPiperPickAndTransferPolicyPiper
 # Create MuJoCo model and data
 mj_model = mujoco.MjModel.from_xml_path("/home/jeong/zeno/wholebody-teleop/act/assets/mobile_piper.xml")
 mj_data = mujoco.MjData(mj_model)
+
+num_beams = 360
+rays_theta, rays_phi = scan_gen.create_lidar_single_line(num_beams)
+exclude_body_id = mj_model.body("lidar_base").id
+lidar = MjLidarWrapper(
+    mj_model,
+    site_name="lidar_site",
+    backend="cpu",  # Use CPU backend
+    cutoff_dist=50.0,  # Maximum detection distance of 50 meters
+    args={'bodyexclude': exclude_body_id}  # CPU backend specific parameter: exclude body
+)
+
 task = MobileDualPiperTaskPiper()
-env = MobileDualPiperEnvironment(mj_model, mj_data, task)
+env = MobileDualPiperEnvironment(mj_model, mj_data, task, lidar=lidar, rays_theta=rays_theta, rays_phi=rays_phi)
 policy = MobileDualPiperPickAndTransferPolicyPiper()
 
 # **************************************************
 # sim code
 # **************************************************
 
-# episode_idx = 0
-# while True:
-#     print("=" * 100)
-#     print(f"Episode {episode_idx}")
-#     print("=" * 100)
-#     ts = env.reset()
-#     policy = MobileDualPiperPickAndTransferPolicyPiper()
-#     episode = [ts]
-#     for idx in range(1500-1):
-#         action = policy(ts)
-#         ts = env.step(action)
-#         episode.append(ts)
-#     data_dict = {
-#         '/observations/qpos': [],
-#         '/observations/qvel': [],
-#         '/observations/images/top': [],
-#         '/observations/images/left': [],
-#         # '/observations/images/right': [],
-#         '/action': [],
-#         '/reward': [],
-#         '/timestamp': [],
-#     }
-#     for time_step, ts in enumerate(episode):
-#         # combined_qpos = np.concatenate([ts.observation['qvel'][:3], ts.observation['qpos'][3:]])
-#         # data_dict['/observations/qpos'].append(combined_qpos)
-#         data_dict['/observations/qpos'].append(ts.observation['qpos'])
-#         data_dict['/observations/qvel'].append(ts.observation['qvel'])
-#         data_dict['/observations/images/top'].append(ts.observation['images']['top'])
-#         data_dict['/observations/images/left'].append(ts.observation['images']['left'])
-#         # data_dict['/observations/images/right'].append(ts.observation['images']['right'])
-#         data_dict['/action'].append(ts.action)
-#         data_dict['/reward'].append(ts.reward)
-#         data_dict['/timestamp'].append(time_step * DT)
+episode_idx = 0
+while True:
+    print("=" * 100)
+    print(f"Episode {episode_idx}")
+    print("=" * 100)
+    ts = env.reset()
+    policy = MobileDualPiperPickAndTransferPolicyPiper()
+    episode = [ts]
+    for idx in range(1500-1):
+        action = policy(ts)
+        ts = env.step(action)
+        episode.append(ts)
+    data_dict = {
+        '/observations/qpos': [],
+        '/observations/qvel': [],
+        '/observations/images/top': [],
+        '/observations/images/left': [],
+        # '/observations/images/right': [],
+        '/observations/lidar/points': [],
+        '/observations/lidar/distances': [],
+        '/action': [],
+        '/reward': [],
+        '/timestamp': [],
+    }
+    for time_step, ts in enumerate(episode):
+        # combined_qpos = np.concatenate([ts.observation['qvel'][:3], ts.observation['qpos'][3:]])
+        # data_dict['/observations/qpos'].append(combined_qpos)
+        data_dict['/observations/qpos'].append(ts.observation['qpos'])
+        data_dict['/observations/qvel'].append(ts.observation['qvel'])
+        data_dict['/observations/images/top'].append(ts.observation['images']['top'])
+        data_dict['/observations/images/left'].append(ts.observation['images']['left'])
+        # data_dict['/observations/images/right'].append(ts.observation['images']['right'])
+        data_dict['/observations/lidar/points'].append(ts.observation['lidar']['points'])
+        data_dict['/observations/lidar/distances'].append(ts.observation['lidar']['distances'])
+        data_dict['/action'].append(ts.action)
+        data_dict['/reward'].append(ts.reward)
+        data_dict['/timestamp'].append(time_step * DT)
     
-#     print("*" * 50)
-#     print(f"Total reward: {ts.reward}")
+    print("*" * 50)
+    print(f"Total reward: {ts.reward}")
 
-#     if ts.reward < 4:
-#         print(f"Episode {episode_idx} failed. Reward: {ts.reward}")
-#         continue
+    if ts.reward < 4:
+        print(f"Episode {episode_idx} failed. Reward: {ts.reward}")
+        continue
 
-#     max_timesteps = len(episode)
-#     dataset_dir = f"/home/jeong/zeno/wholebody-teleop/act/dataset/sim_mobile_transfer_cube"
-#     os.makedirs(dataset_dir, exist_ok=True)
-#     dataset_path = os.path.join(dataset_dir, f'episode_{episode_idx}')
-#     print(f"Saving episode {episode_idx} to {dataset_path}, {max_timesteps} timesteps...")
-#     with h5py.File(dataset_path + '.hdf5', 'w', rdcc_nbytes=1024 ** 2 * 2) as root:
-#         root.attrs['sim'] = True
-#         obs = root.create_group('observations')
-#         image = obs.create_group('images')
-#         image.create_dataset('top', (max_timesteps, 480, 640, 3), dtype='uint8', chunks=(1, 480, 640, 3))
-#         image.create_dataset('left', (max_timesteps, 480, 640, 3), dtype='uint8', chunks=(1, 480, 640, 3))
-#         # image.create_dataset('right', (max_timesteps, 480, 640, 3), dtype='uint8', chunks=(1, 480, 640, 3))
-#         qpos = obs.create_dataset('qpos', (max_timesteps, 17))
-#         qvel = obs.create_dataset('qvel', (max_timesteps, 17))
-#         action = root.create_dataset('action', (max_timesteps, 17))
-#         reward = root.create_dataset('reward', (max_timesteps,))
-#         timestamp = root.create_dataset('timestamp', (max_timesteps,))
+    max_timesteps = len(episode)
+    dataset_dir = f"/home/jeong/zeno/wholebody-teleop/act/dataset/sim_mobile_transfer_cube"
+    os.makedirs(dataset_dir, exist_ok=True)
+    dataset_path = os.path.join(dataset_dir, f'episode_{episode_idx}')
+    print(f"Saving episode {episode_idx} to {dataset_path}, {max_timesteps} timesteps...")
+    with h5py.File(dataset_path + '.hdf5', 'w', rdcc_nbytes=1024 ** 2 * 2) as root:
+        root.attrs['sim'] = True
+        obs = root.create_group('observations')
+        image = obs.create_group('images')
+        image.create_dataset('top', (max_timesteps, 480, 640, 3), dtype='uint8', chunks=(1, 480, 640, 3))
+        image.create_dataset('left', (max_timesteps, 480, 640, 3), dtype='uint8', chunks=(1, 480, 640, 3))
+        # image.create_dataset('right', (max_timesteps, 480, 640, 3), dtype='uint8', chunks=(1, 480, 640, 3))
+        qpos = obs.create_dataset('qpos', (max_timesteps, 17))
+        qvel = obs.create_dataset('qvel', (max_timesteps, 17))
+        lidar_group = obs.create_group('lidar')
+        lidar_group.create_dataset('points', (max_timesteps, num_beams, 3))
+        lidar_group.create_dataset('distances', (max_timesteps, num_beams))
+        action = root.create_dataset('action', (max_timesteps, 17))
+        reward = root.create_dataset('reward', (max_timesteps,))
+        timestamp = root.create_dataset('timestamp', (max_timesteps,))
 
-#         for name, array in data_dict.items():
-#             root[name][...] = array
+        for name, array in data_dict.items():
+            root[name][...] = array
 
-#     print("*" * 50)
-#     episode_idx += 1
-#     if episode_idx >= 50:
-#         break
+    print("*" * 50)
+    episode_idx += 1
+    if episode_idx >= 50:
+        break
 
-# exit()
+exit()
 
 # **************************************************
 # test code

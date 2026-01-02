@@ -243,7 +243,14 @@ class MobileDualPiperTaskPiper():
         env_state = data.qpos.copy()[19:]
         return env_state
 
-    def get_observation(self, data, renderer=None):
+    @staticmethod
+    def get_lidar_data(data, lidar, rays_theta, rays_phi):
+        lidar.trace_rays(data, rays_theta, rays_phi)
+        points = lidar.get_hit_points()  # shape: (N, 3)
+        distances = lidar.get_distances()  # shape: (N,)
+        return points, distances
+
+    def get_observation(self, data, renderer=None, lidar=None, rays_theta=None, rays_phi=None):
         obs = collections.OrderedDict()
         obs['qpos'] = self.get_qpos(data)
         obs['qvel'] = self.get_qvel(data)
@@ -262,6 +269,11 @@ class MobileDualPiperTaskPiper():
             obs['images']['top'] = np.random.randint(0, 255, (480, 640, 3))
             obs['images']['left'] = np.random.randint(0, 255, (480, 640, 3))
             obs['images']['right'] = np.random.randint(0, 255, (480, 640, 3))
+        obs['lidar'] = dict()
+        if lidar is not None:
+            points, distances = self.get_lidar_data(data, lidar, rays_theta, rays_phi)
+            obs['lidar']['points'] = points
+            obs['lidar']['distances'] = distances
         return obs
 
     def get_reward(self, model, data):
