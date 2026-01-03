@@ -13,7 +13,7 @@ from constants import PUPPET_GRIPPER_JOINT_OPEN
 from utils import load_data # data functions
 from utils import sample_box_pose, sample_insertion_pose # robot functions
 from utils import compute_dict_mean, set_seed, detach_dict # helper functions
-from policy import ACTPolicy, CNNMLPPolicy
+from policy import ACTPolicy, CNNMLPPolicy, ACTPolicy_Lidar
 from visualize_episodes import save_videos
 
 from sim_env import BOX_POSE
@@ -32,6 +32,8 @@ def main(args):
     batch_size_train = args['batch_size']
     batch_size_val = args['batch_size']
     num_epochs = args['num_epochs']
+    use_lidar = args.get('use_lidar', False)
+    use_torque = args.get('use_torque', False)
 
     # get task parameters
     is_sim = task_name[:4] == 'sim_'
@@ -66,6 +68,11 @@ def main(args):
                          'nheads': nheads,
                          'camera_names': camera_names,
                          }
+        # Add LiDAR config if use_lidar is True
+        if use_lidar:
+            from lidar_encoder import LiDAREncoderConfig
+            lidar_config = LiDAREncoderConfig(embedding_dim=args['hidden_dim'])
+            policy_config['lidar_config'] = lidar_config
     elif policy_class == 'CNNMLP':
         policy_config = {'lr': args['lr'], 'lr_backbone': lr_backbone, 'backbone' : backbone, 'num_queries': 1,
                          'camera_names': camera_names,}
@@ -85,7 +92,9 @@ def main(args):
         'seed': args['seed'],
         'temporal_agg': args['temporal_agg'],
         'camera_names': camera_names,
-        'real_robot': not is_sim
+        'real_robot': not is_sim,
+        'use_lidar': use_lidar,
+        'use_torque': use_torque
     }
 
     if is_eval:
@@ -112,7 +121,27 @@ def main(args):
     with open(stats_path, 'wb') as f:
         pickle.dump(stats, f)
 
-    best_ckpt_info = train_bc(train_dataloader, val_dataloader, config)
+    # Debug: Check qtor statistics in dataset
+    if use_torque:
+        print("Checking qtor statistics in dataset...")
+        sample_batch = next(iter(train_dataloader))
+        _, _, _, qtor_sample, _, _ = sample_batch
+        qtor_sample = qtor_sample.cuda()
+        print(f"  qtor shape: {qtor_sample.shape}")
+        print(f"  qtor mean: {qtor_sample.mean().item():.6f}")
+        print(f"  qtor std: {qtor_sample.std().item():.6f}")
+        print(f"  qtor min: {qtor_sample.min().item():.6f}")
+        print(f"  qtor max: {qtor_sample.max().item():.6f}")
+        print(f"  qtor first 3 dims mean: {qtor_sample[:, :3].mean().item():.6f}")
+        print(f"  qtor remaining dims mean: {qtor_sample[:, 3:].mean().item():.6f}")
+        print(f"  qtor non-zero elements: {(qtor_sample.abs() > 1e-6).sum().item()} / {qtor_sample.numel()}")
+    
+    # Use LiDAR training function if use_lidar is True
+    if use_lidar:
+        print("Using LiDAR-enabled training...")
+        best_ckpt_info = train_bc_lidar(train_dataloader, val_dataloader, config)
+    else:
+        best_ckpt_info = train_bc(train_dataloader, val_dataloader, config)
     best_epoch, min_val_loss, best_state_dict = best_ckpt_info
 
     # save best checkpoint
@@ -126,6 +155,17 @@ def make_policy(policy_class, policy_config):
         policy = ACTPolicy(policy_config)
     elif policy_class == 'CNNMLP':
         policy = CNNMLPPolicy(policy_config)
+    else:
+        raise NotImplementedError
+    return policy
+
+
+def make_policy_lidar(policy_class, policy_config):
+    """Create policy with LiDAR support."""
+    if policy_class == 'ACT':
+        policy = ACTPolicy_Lidar(policy_config)
+    elif policy_class == 'CNNMLP':
+        policy = CNNMLPPolicy(policy_config)  # CNNMLP doesn't have LiDAR support yet
     else:
         raise NotImplementedError
     return policy
@@ -167,7 +207,11 @@ def eval_bc(config, ckpt_name, save_episode=True):
 
     # load policy and stats
     ckpt_path = os.path.join(ckpt_dir, ckpt_name)
-    policy = make_policy(policy_class, policy_config)
+    use_lidar = config.get('use_lidar', False)
+    if use_lidar:
+        policy = make_policy_lidar(policy_class, policy_config)
+    else:
+        policy = make_policy(policy_class, policy_config)
     loading_status = policy.load_state_dict(torch.load(ckpt_path))
     print(loading_status)
     policy.cuda()
@@ -251,18 +295,40 @@ def eval_bc(config, ckpt_name, save_episode=True):
                 qpos = torch.from_numpy(qpos).float().cuda().unsqueeze(0)
                 qpos_history[:, t] = qpos
                 # get qtor if available, otherwise use zeros
+                use_torque = config.get('use_torque', False)
                 if 'qtor' in obs:
                     qtor_numpy = np.array(obs['qtor'])
                 else:
                     qtor_numpy = np.zeros_like(qpos_numpy)
                 qtor = pre_process_qtor(qtor_numpy)
                 qtor = torch.from_numpy(qtor).float().cuda().unsqueeze(0)
+                
+                # Handle qtor based on use_torque flag
+                if use_torque:
+                    # Use qtor but set first 3 values to zero
+                    qtor = qtor.clone()
+                    qtor[:, :3] = 0.0
+                else:
+                    # Set all values to zero
+                    qtor = torch.zeros_like(qtor)
+                
                 curr_image = get_image(ts, camera_names)
+                
+                # Get LiDAR scan if available
+                lidar_scan = None
+                if 'lidar' in obs and 'distances' in obs['lidar']:
+                    lidar_distances = np.array(obs['lidar']['distances'])
+                    lidar_scan = torch.from_numpy(lidar_distances).float().cuda().unsqueeze(0)
 
                 ### query policy
                 if config['policy_class'] == "ACT":
                     if t % query_frequency == 0:
-                        all_actions = policy(qpos, qtor, curr_image)
+                        if lidar_scan is not None and hasattr(policy.model, 'lidar_encoder'):
+                            # Policy supports LiDAR
+                            all_actions = policy(qpos, qtor, curr_image, lidar_scan=lidar_scan)
+                        else:
+                            # Standard policy without LiDAR
+                            all_actions = policy(qpos, qtor, curr_image)
                     if temporal_agg:
                         all_time_actions[[t], t:t+num_queries] = all_actions
                         actions_for_curr_step = all_time_actions[:, t]
@@ -329,13 +395,60 @@ def eval_bc(config, ckpt_name, save_episode=True):
     return success_rate, avg_return
 
 
-def forward_pass(data, policy):
+def forward_pass(data, policy, use_torque=False):
     image_data, qpos_data, qvel_data, qtor_data, action_data, is_pad = data
     image_data, qpos_data, qvel_data, qtor_data, action_data, is_pad = image_data.cuda(), qpos_data.cuda(), qvel_data.cuda(), qtor_data.cuda(), action_data.cuda(), is_pad.cuda()
 
     qpos_data = torch.concatenate([qvel_data[:, :3], qpos_data[:, 3:]], dim=1)
+    
+    # Handle qtor based on use_torque flag
+    if use_torque:
+        # Use qtor but set first 3 values to zero
+        qtor_data = qtor_data.clone()
+        qtor_data[:, :3] = 0.0
+    else:
+        # Set all values to zero
+        qtor_data = torch.zeros_like(qtor_data)
+    
+    # Debug: Verify qtor values are different between use_torque=True and False
+    # This will help identify if the issue is in data processing or model
+    if hasattr(forward_pass, '_debug_count'):
+        forward_pass._debug_count += 1
+    else:
+        forward_pass._debug_count = 0
+    
+    if forward_pass._debug_count < 2:  # Print first 2 calls
+        print(f"DEBUG forward_pass (call {forward_pass._debug_count}): use_torque={use_torque}")
+        print(f"  qtor_data mean: {qtor_data.mean().item():.6f}, std: {qtor_data.std().item():.6f}")
+        print(f"  qtor_data after processing - first 3: {qtor_data[0, :3].cpu().numpy()}, remaining: {qtor_data[0, 3:].cpu().numpy()[:5]}...")
 
     return policy(qpos_data, qtor_data, image_data, action_data, is_pad) # TODO remove None
+
+
+def forward_pass_lidar(data, policy, use_torque=False):
+    """Forward pass with LiDAR support. Expects data tuple with lidar_data as 7th element."""
+    if len(data) == 7:
+        image_data, qpos_data, qvel_data, qtor_data, action_data, is_pad, lidar_data = data
+        lidar_data = lidar_data.cuda()
+    else:
+        # Fallback: no LiDAR data provided
+        image_data, qpos_data, qvel_data, qtor_data, action_data, is_pad = data
+        lidar_data = None
+    
+    image_data, qpos_data, qvel_data, qtor_data, action_data, is_pad = image_data.cuda(), qpos_data.cuda(), qvel_data.cuda(), qtor_data.cuda(), action_data.cuda(), is_pad.cuda()
+
+    qpos_data = torch.concatenate([qvel_data[:, :3], qpos_data[:, 3:]], dim=1)
+    
+    # Handle qtor based on use_torque flag
+    if use_torque:
+        # Use qtor but set first 3 values to zero
+        qtor_data = qtor_data.clone()
+        qtor_data[:, :3] = 0.0
+    else:
+        # Set all values to zero (use qtor_data shape, not qpos_data shape)
+        qtor_data = torch.zeros_like(qtor_data)
+
+    return policy(qpos_data, qtor_data, image_data, lidar_scan=lidar_data, actions=action_data, is_pad=is_pad)
 
 
 def train_bc(train_dataloader, val_dataloader, config):
@@ -344,6 +457,7 @@ def train_bc(train_dataloader, val_dataloader, config):
     seed = config['seed']
     policy_class = config['policy_class']
     policy_config = config['policy_config']
+    use_torque = config.get('use_torque', False)
 
     set_seed(seed)
 
@@ -362,7 +476,7 @@ def train_bc(train_dataloader, val_dataloader, config):
             policy.eval()
             epoch_dicts = []
             for batch_idx, data in enumerate(val_dataloader):
-                forward_dict = forward_pass(data, policy)
+                forward_dict = forward_pass(data, policy, use_torque=use_torque)
                 epoch_dicts.append(forward_dict)
             epoch_summary = compute_dict_mean(epoch_dicts)
             validation_history.append(epoch_summary)
@@ -381,10 +495,23 @@ def train_bc(train_dataloader, val_dataloader, config):
         policy.train()
         optimizer.zero_grad()
         for batch_idx, data in enumerate(train_dataloader):
-            forward_dict = forward_pass(data, policy)
+            forward_dict = forward_pass(data, policy, use_torque=use_torque)
             # backward
             loss = forward_dict['loss']
             loss.backward()
+            
+            # Debug: Check qtor parameter values and gradients
+            if epoch == 0 and batch_idx == 0:
+                print(f"\nDEBUG: Epoch {epoch}, Batch {batch_idx}, use_torque={use_torque}")
+                for name, param in policy.model.named_parameters():
+                    if 'torque' in name.lower():
+                        param_mean = param.data.abs().mean().item()
+                        if param.grad is not None:
+                            grad_mean = param.grad.abs().mean().item()
+                            print(f"  {name}: param_mean={param_mean:.6f}, grad_mean={grad_mean:.8f}")
+                        else:
+                            print(f"  {name}: param_mean={param_mean:.6f}, grad=None")
+            
             optimizer.step()
             optimizer.zero_grad()
             train_history.append(detach_dict(forward_dict))
@@ -395,6 +522,73 @@ def train_bc(train_dataloader, val_dataloader, config):
         for k, v in epoch_summary.items():
             summary_string += f'{k}: {v.item():.3f} '
         # print(summary_string)
+
+        if epoch % 100 == 0:
+            ckpt_path = os.path.join(ckpt_dir, f'policy_epoch_{epoch}_seed_{seed}.ckpt')
+            torch.save(policy.state_dict(), ckpt_path)
+            plot_history(train_history, validation_history, epoch, ckpt_dir, seed)
+
+    ckpt_path = os.path.join(ckpt_dir, f'policy_last.ckpt')
+    torch.save(policy.state_dict(), ckpt_path)
+
+    best_epoch, min_val_loss, best_state_dict = best_ckpt_info
+    ckpt_path = os.path.join(ckpt_dir, f'policy_epoch_{best_epoch}_seed_{seed}.ckpt')
+    torch.save(best_state_dict, ckpt_path)
+    print(f'Training finished:\nSeed {seed}, val loss {min_val_loss:.6f} at epoch {best_epoch}')
+
+    # save training curves
+    plot_history(train_history, validation_history, num_epochs, ckpt_dir, seed)
+
+    return best_ckpt_info
+
+
+def train_bc_lidar(train_dataloader, val_dataloader, config):
+    """Training function with LiDAR support."""
+    num_epochs = config['num_epochs']
+    ckpt_dir = config['ckpt_dir']
+    seed = config['seed']
+    policy_class = config['policy_class']
+    policy_config = config['policy_config']
+    use_torque = config.get('use_torque', False)
+
+    set_seed(seed)
+
+    policy = make_policy_lidar(policy_class, policy_config)
+    policy.cuda()
+    optimizer = make_optimizer(policy_class, policy)
+
+    train_history = []
+    validation_history = []
+    min_val_loss = np.inf
+    best_ckpt_info = None
+    for epoch in tqdm(range(num_epochs)):
+        # validation
+        with torch.inference_mode():
+            policy.eval()
+            epoch_dicts = []
+            for batch_idx, data in enumerate(val_dataloader):
+                forward_dict = forward_pass_lidar(data, policy, use_torque=use_torque)
+                epoch_dicts.append(forward_dict)
+            epoch_summary = compute_dict_mean(epoch_dicts)
+            validation_history.append(epoch_summary)
+
+            epoch_val_loss = epoch_summary['loss']
+            if epoch_val_loss < min_val_loss:
+                min_val_loss = epoch_val_loss
+                best_ckpt_info = (epoch, min_val_loss, deepcopy(policy.state_dict()))
+
+        # training
+        policy.train()
+        optimizer.zero_grad()
+        for batch_idx, data in enumerate(train_dataloader):
+            forward_dict = forward_pass_lidar(data, policy, use_torque=use_torque)
+            # backward
+            loss = forward_dict['loss']
+            loss.backward()
+            optimizer.step()
+            optimizer.zero_grad()
+            train_history.append(detach_dict(forward_dict))
+        epoch_summary = compute_dict_mean(train_history[(batch_idx+1)*epoch:(batch_idx+1)*(epoch+1)])
 
         if epoch % 100 == 0:
             ckpt_path = os.path.join(ckpt_dir, f'policy_epoch_{epoch}_seed_{seed}.ckpt')
@@ -450,5 +644,7 @@ if __name__ == '__main__':
     parser.add_argument('--hidden_dim', action='store', type=int, help='hidden_dim', required=False)
     parser.add_argument('--dim_feedforward', action='store', type=int, help='dim_feedforward', required=False)
     parser.add_argument('--temporal_agg', action='store_true')
+    parser.add_argument('--use_lidar', action='store_true', help='Use LiDAR-enabled training and evaluation')
+    parser.add_argument('--use_torque', action='store_true', help='Use qtor as input (first 3 values set to zero); if false, set all values to zero')
     
     main(vars(parser.parse_args()))

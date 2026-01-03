@@ -236,7 +236,7 @@ class MobileDualPiperTaskPiper():
         right_arm_qtor = qtor_raw[10:16]
         left_gripper_qtor = qtor_raw[6]
         right_gripper_qtor = qtor_raw[13]
-        return np.concatenate([base_qtor, left_arm_qtor, left_gripper_qtor, right_arm_qtor, right_gripper_qtor])
+        return np.concatenate([base_qtor, left_arm_qtor, [left_gripper_qtor], right_arm_qtor, [right_gripper_qtor]])
 
     @staticmethod
     def get_env_state(data):

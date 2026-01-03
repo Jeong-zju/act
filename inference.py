@@ -13,7 +13,8 @@ from constants import PUPPET_GRIPPER_JOINT_OPEN
 from utils import load_data # data functions
 from utils import sample_box_pose, sample_insertion_pose # robot functions
 from utils import compute_dict_mean, set_seed, detach_dict # helper functions
-from policy import ACTPolicy, CNNMLPPolicy
+from policy import ACTPolicy, CNNMLPPolicy, ACTPolicy_Lidar
+from lidar_encoder import LiDAREncoderConfig
 from visualize_episodes import save_videos
 
 from sim_env import BOX_POSE
@@ -55,6 +56,9 @@ def main(args):
     state_dim = 17
     lr_backbone = 1e-5
     backbone = 'resnet18'
+    use_lidar = args.get('use_lidar', False)
+    use_torque = args.get('use_torque', False)
+    
     if policy_class == 'ACT':
         enc_layers = 4
         dec_layers = 7
@@ -71,6 +75,11 @@ def main(args):
                          'nheads': nheads,
                          'camera_names': camera_names,
                          }
+        # Add LiDAR config if use_lidar is True
+        if use_lidar:
+            lidar_config = LiDAREncoderConfig()
+            policy_config['lidar_config'] = lidar_config
+            policy_config['lr_lidar'] = args['lr']  # Use same learning rate for LiDAR encoder
     elif policy_class == 'CNNMLP':
         policy_config = {'lr': args['lr'], 'lr_backbone': lr_backbone, 'backbone' : backbone, 'num_queries': 1,
                          'camera_names': camera_names,}
@@ -90,7 +99,9 @@ def main(args):
         'seed': args['seed'],
         'temporal_agg': args['temporal_agg'],
         'camera_names': camera_names,
-        'real_robot': not is_sim
+        'real_robot': not is_sim,
+        'use_lidar': use_lidar,
+        'use_torque': use_torque
     }
 
     if is_eval:
@@ -127,9 +138,12 @@ def main(args):
     print(f'Best ckpt, val loss {min_val_loss:.6f} @ epoch{best_epoch}')
 
 
-def make_policy(policy_class, policy_config):
+def make_policy(policy_class, policy_config, use_lidar=False):
     if policy_class == 'ACT':
-        policy = ACTPolicy(policy_config)
+        if use_lidar:
+            policy = ACTPolicy_Lidar(policy_config)
+        else:
+            policy = ACTPolicy(policy_config)
     elif policy_class == 'CNNMLP':
         policy = CNNMLPPolicy(policy_config)
     else:
@@ -169,14 +183,18 @@ def eval_bc(config, ckpt_name, save_episode=True):
     max_timesteps = config['episode_len']
     task_name = config['task_name']
     temporal_agg = config['temporal_agg']
+    use_lidar = config.get('use_lidar', False)
+    use_torque = config.get('use_torque', False)
     onscreen_cam = 'angle'
 
     import pathlib
     HERE = str(pathlib.Path(__file__).parent.resolve())
 
     # load policy and stats
+    use_lidar = config.get('use_lidar', False)
+    use_torque = config.get('use_torque', False)
     ckpt_path = os.path.join(HERE, ckpt_dir, ckpt_name)
-    policy = make_policy(policy_class, policy_config)
+    policy = make_policy(policy_class, policy_config, use_lidar=use_lidar)
     loading_status = policy.load_state_dict(torch.load(ckpt_path))
     print(loading_status)
     policy.cuda()
@@ -297,13 +315,34 @@ def eval_bc(config, ckpt_name, save_episode=True):
                     qtor_numpy = np.zeros_like(qpos_numpy)
                 qtor = pre_process_qtor(qtor_numpy)
                 qtor = torch.from_numpy(qtor).float().cuda().unsqueeze(0)
+                
+                # Handle qtor based on use_torque flag
+                if use_torque:
+                    # Use qtor but set first 3 values to zero
+                    qtor[:, :3] = 0.0
+                else:
+                    # Set all values to zero
+                    qtor = torch.zeros_like(qtor)
+                
                 curr_image = get_image(ts, camera_names)
+                
+                # Get LiDAR scan if available and use_lidar is True
+                lidar_scan = None
+                if use_lidar and 'lidar' in obs:
+                    if 'distances' in obs['lidar']:
+                        lidar_distances = np.array(obs['lidar']['distances'])
+                        lidar_scan = torch.from_numpy(lidar_distances).float().cuda().unsqueeze(0)
+                    elif 'scan' in obs['lidar']:
+                        lidar_scan = torch.from_numpy(np.array(obs['lidar']['scan'])).float().cuda().unsqueeze(0)
 
                 ### query policy
                 if config['policy_class'] == "ACT":
                     if t % query_frequency == 0:
                         qpos = torch.concatenate([qvel[:, :3], qpos[:, 3:]], dim=1)
-                        all_actions = policy(qpos, qtor, curr_image)
+                        if use_lidar:
+                            all_actions = policy(qpos, qtor, curr_image, lidar_scan=lidar_scan)
+                        else:
+                            all_actions = policy(qpos, qtor, curr_image)
                     if temporal_agg:
                         all_time_actions[[t], t:t+num_queries] = all_actions
                         actions_for_curr_step = all_time_actions[:, t]
@@ -388,10 +427,11 @@ def train_bc(train_dataloader, val_dataloader, config):
     seed = config['seed']
     policy_class = config['policy_class']
     policy_config = config['policy_config']
+    use_lidar = config.get('use_lidar', False)
 
     set_seed(seed)
 
-    policy = make_policy(policy_class, policy_config)
+    policy = make_policy(policy_class, policy_config, use_lidar=use_lidar)
     policy.cuda()
     optimizer = make_optimizer(policy_class, policy)
 
@@ -494,5 +534,7 @@ if __name__ == '__main__':
     parser.add_argument('--hidden_dim', action='store', type=int, help='hidden_dim', required=False)
     parser.add_argument('--dim_feedforward', action='store', type=int, help='dim_feedforward', required=False)
     parser.add_argument('--temporal_agg', action='store_true')
+    parser.add_argument('--use_lidar', action='store_true', help='Use LiDAR-enabled training and evaluation')
+    parser.add_argument('--use_torque', action='store_true', help='Use qtor as input (first 3 values set to zero); if false, set all values to zero')
     
     main(vars(parser.parse_args()))

@@ -30,7 +30,7 @@ lidar = MjLidarWrapper(
     args={'bodyexclude': exclude_body_id}  # CPU backend specific parameter: exclude body
 )
 
-task = MobileDualPiperTaskPiper()
+task = MobileDualPiperTaskPiper(enable_qtor=True)
 env = MobileDualPiperEnvironment(mj_model, mj_data, task, lidar=lidar, rays_theta=rays_theta, rays_phi=rays_phi)
 policy = MobileDualPiperPickAndTransferPolicyPiper()
 
@@ -53,6 +53,7 @@ while True:
     data_dict = {
         '/observations/qpos': [],
         '/observations/qvel': [],
+        '/observations/qtor': [],
         '/observations/images/top': [],
         '/observations/images/left': [],
         # '/observations/images/right': [],
@@ -67,6 +68,7 @@ while True:
         # data_dict['/observations/qpos'].append(combined_qpos)
         data_dict['/observations/qpos'].append(ts.observation['qpos'])
         data_dict['/observations/qvel'].append(ts.observation['qvel'])
+        data_dict['/observations/qtor'].append(ts.observation['qtor'])
         data_dict['/observations/images/top'].append(ts.observation['images']['top'])
         data_dict['/observations/images/left'].append(ts.observation['images']['left'])
         # data_dict['/observations/images/right'].append(ts.observation['images']['right'])
@@ -97,6 +99,7 @@ while True:
         # image.create_dataset('right', (max_timesteps, 480, 640, 3), dtype='uint8', chunks=(1, 480, 640, 3))
         qpos = obs.create_dataset('qpos', (max_timesteps, 17))
         qvel = obs.create_dataset('qvel', (max_timesteps, 17))
+        qtor = obs.create_dataset('qtor', (max_timesteps, 17))
         lidar_group = obs.create_group('lidar')
         lidar_group.create_dataset('points', (max_timesteps, num_beams, 3))
         lidar_group.create_dataset('distances', (max_timesteps, num_beams))
