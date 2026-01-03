@@ -64,6 +64,8 @@ def get_args_parser():
     parser.add_argument('--chunk_size', action='store', type=int, help='chunk_size', required=False)
     parser.add_argument('--temporal_agg', action='store_true')
 
+    parser.add_argument('--use_qtor', action='store_true', help='Use qtor (torque) data from dataset')
+
     return parser
 
 

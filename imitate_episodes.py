@@ -32,6 +32,8 @@ def main(args):
     batch_size_train = args['batch_size']
     batch_size_val = args['batch_size']
     num_epochs = args['num_epochs']
+    use_qtor = args.get('use_qtor', False)
+    use_lidar = args.get('use_lidar', False)
 
     # get task parameters
     is_sim = task_name[:4] == 'sim_'
@@ -47,7 +49,7 @@ def main(args):
     camera_names = task_config['camera_names']
 
     # fixed parameters
-    state_dim = 14
+    state_dim = 17
     lr_backbone = 1e-5
     backbone = 'resnet18'
     if policy_class == 'ACT':
@@ -65,6 +67,8 @@ def main(args):
                          'dec_layers': dec_layers,
                          'nheads': nheads,
                          'camera_names': camera_names,
+                         'state_dim': state_dim,
+                         'use_lidar': use_lidar,
                          }
     elif policy_class == 'CNNMLP':
         policy_config = {'lr': args['lr'], 'lr_backbone': lr_backbone, 'backbone' : backbone, 'num_queries': 1,
@@ -85,7 +89,9 @@ def main(args):
         'seed': args['seed'],
         'temporal_agg': args['temporal_agg'],
         'camera_names': camera_names,
-        'real_robot': not is_sim
+        'real_robot': not is_sim,
+        'use_qtor': use_qtor,
+        'use_lidar': use_lidar
     }
 
     if is_eval:
@@ -100,7 +106,7 @@ def main(args):
         print()
         exit()
 
-    train_dataloader, val_dataloader, stats, _ = load_data(dataset_dir, num_episodes, camera_names, batch_size_train, batch_size_val)
+    train_dataloader, val_dataloader, stats, _ = load_data(dataset_dir, num_episodes, camera_names, batch_size_train, batch_size_val, use_qtor=use_qtor, use_lidar=use_lidar)
 
     # save dataset stats
     if not os.path.isdir(ckpt_dir):
@@ -160,6 +166,8 @@ def eval_bc(config, ckpt_name, save_episode=True):
     max_timesteps = config['episode_len']
     task_name = config['task_name']
     temporal_agg = config['temporal_agg']
+    use_qtor = config.get('use_qtor', False)
+    use_lidar = config.get('use_lidar', False)
     onscreen_cam = 'angle'
 
     # load policy and stats
@@ -174,8 +182,75 @@ def eval_bc(config, ckpt_name, save_episode=True):
     with open(stats_path, 'rb') as f:
         stats = pickle.load(f)
 
-    pre_process = lambda s_qpos: (s_qpos - stats['qpos_mean']) / stats['qpos_std']
-    post_process = lambda a: a * stats['action_std'] + stats['action_mean']
+    # Pad stats if they are 14D (for backward compatibility with old datasets)
+    if stats['qpos_mean'].shape[-1] < 17:
+        pad_size = 17 - stats['qpos_mean'].shape[-1]
+        qpos_mean_padding = np.zeros(pad_size)
+        qpos_std_padding = np.ones(pad_size)  # Use 1.0 for std to avoid division issues
+        stats['qpos_mean'] = np.concatenate([qpos_mean_padding, stats['qpos_mean']])
+        stats['qpos_std'] = np.concatenate([qpos_std_padding, stats['qpos_std']])
+        if 'example_qpos' in stats and stats['example_qpos'].shape[-1] < 17:
+            example_qpos_padding = np.zeros((*stats['example_qpos'].shape[:-1], pad_size))
+            stats['example_qpos'] = np.concatenate([example_qpos_padding, stats['example_qpos']], axis=-1)
+    
+    # Pad action stats if they are 14D (for backward compatibility with old datasets)
+    if stats['action_mean'].shape[-1] < 17:
+        pad_size = 17 - stats['action_mean'].shape[-1]
+        action_mean_padding = np.zeros(pad_size)
+        action_std_padding = np.ones(pad_size)  # Use 1.0 for std to avoid division issues
+        stats['action_mean'] = np.concatenate([action_mean_padding, stats['action_mean']])
+        stats['action_std'] = np.concatenate([action_std_padding, stats['action_std']])
+
+    def pad_qpos(qpos, target_dim=17):
+        """Pad qpos array/tensor with zeros at the front if dimension is less than target_dim."""
+        if isinstance(qpos, torch.Tensor):
+            qpos_np = qpos.cpu().numpy()
+            is_tensor = True
+            device = qpos.device if hasattr(qpos, 'device') else None
+        else:
+            qpos_np = np.asarray(qpos)
+            is_tensor = False
+            device = None
+        
+        original_shape = qpos_np.shape
+        current_dim = original_shape[-1]
+        
+        if current_dim < target_dim:
+            pad_size = target_dim - current_dim
+            # Pad along the last dimension
+            pad_shape = list(original_shape)
+            pad_shape[-1] = pad_size
+            padding = np.zeros(pad_shape, dtype=qpos_np.dtype)
+            padded = np.concatenate([padding, qpos_np], axis=-1)
+        elif current_dim == target_dim:
+            padded = qpos_np
+        else:
+            raise ValueError(f"qpos dimension {current_dim} is greater than target_dim {target_dim}")
+        
+        if is_tensor:
+            result = torch.from_numpy(padded).float()
+            if device is not None:
+                result = result.to(device)
+            return result
+        else:
+            return padded
+    
+    def pre_process(s_qpos):
+        """Preprocess qpos: pad if needed, then normalize."""
+        s_qpos_padded = pad_qpos(s_qpos, target_dim=17)
+        return (s_qpos_padded - stats['qpos_mean']) / stats['qpos_std']
+    
+    def post_process(a):
+        """Post-process action: pad if needed, denormalize, then remove padding for environment."""
+        # Pad action if it's 14D (for backward compatibility with old policies)
+        if a.shape[-1] < 17:
+            a = pad_qpos(a, target_dim=17)
+        # Denormalize
+        a_denorm = a * stats['action_std'] + stats['action_mean']
+        # Remove padding to get back to 14D for environment
+        if a_denorm.shape[-1] == 17:
+            a_denorm = a_denorm[..., 3:]  # Remove first 3 padded zeros
+        return a_denorm
 
     # load environment
     if real_robot:
@@ -242,12 +317,26 @@ def eval_bc(config, ckpt_name, save_episode=True):
                 qpos = pre_process(qpos_numpy)
                 qpos = torch.from_numpy(qpos).float().cuda().unsqueeze(0)
                 qpos_history[:, t] = qpos
+                # Load qtor if available and use_qtor is True
+                if use_qtor and 'qtor' in obs:
+                    qtor_numpy = np.array(obs['qtor'])
+                    qtor = pre_process(qtor_numpy)
+                    qtor = torch.from_numpy(qtor).float().cuda().unsqueeze(0)
+                else:
+                    qtor = torch.zeros_like(qpos)
+                # Load lidar_scan if available and use_lidar is True
+                if use_lidar and 'lidar' in obs and 'distances' in obs['lidar']:
+                    lidar_scan_numpy = np.array(obs['lidar']['distances'])
+                    lidar_scan = torch.from_numpy(lidar_scan_numpy).float().cuda().unsqueeze(0)
+                else:
+                    # Default to 1080 beams if we need to create zeros
+                    lidar_scan = torch.zeros((1, 1080), dtype=torch.float32).cuda()
                 curr_image = get_image(ts, camera_names)
 
                 ### query policy
                 if config['policy_class'] == "ACT":
                     if t % query_frequency == 0:
-                        all_actions = policy(qpos, curr_image)
+                        all_actions = policy(qpos, curr_image, qtor=qtor, lidar_scan=lidar_scan)
                     if temporal_agg:
                         all_time_actions[[t], t:t+num_queries] = all_actions
                         actions_for_curr_step = all_time_actions[:, t]
@@ -261,7 +350,7 @@ def eval_bc(config, ckpt_name, save_episode=True):
                     else:
                         raw_action = all_actions[:, t % query_frequency]
                 elif config['policy_class'] == "CNNMLP":
-                    raw_action = policy(qpos, curr_image)
+                    raw_action = policy(qpos, curr_image, qtor=qtor, lidar_scan=lidar_scan)
                 else:
                     raise NotImplementedError
 
@@ -317,9 +406,9 @@ def eval_bc(config, ckpt_name, save_episode=True):
 
 
 def forward_pass(data, policy):
-    image_data, qpos_data, action_data, is_pad = data
-    image_data, qpos_data, action_data, is_pad = image_data.cuda(), qpos_data.cuda(), action_data.cuda(), is_pad.cuda()
-    return policy(qpos_data, image_data, action_data, is_pad) # TODO remove None
+    image_data, qpos_data, qtor_data, lidar_scan_data, action_data, is_pad = data
+    image_data, qpos_data, qtor_data, lidar_scan_data, action_data, is_pad = image_data.cuda(), qpos_data.cuda(), qtor_data.cuda(), lidar_scan_data.cuda(), action_data.cuda(), is_pad.cuda()
+    return policy(qpos_data, image_data, action_data, is_pad, qtor=qtor_data, lidar_scan=lidar_scan_data) # TODO remove None
 
 
 def train_bc(train_dataloader, val_dataloader, config):
@@ -434,5 +523,7 @@ if __name__ == '__main__':
     parser.add_argument('--hidden_dim', action='store', type=int, help='hidden_dim', required=False)
     parser.add_argument('--dim_feedforward', action='store', type=int, help='dim_feedforward', required=False)
     parser.add_argument('--temporal_agg', action='store_true')
+    parser.add_argument('--use_qtor', action='store_true', help='Use qtor (torque) data from dataset')
+    parser.add_argument('--use_lidar', action='store_true', help='Use lidar_scan data from dataset')
     
     main(vars(parser.parse_args()))

@@ -46,7 +46,7 @@ class Transformer(nn.Module):
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
 
-    def forward(self, src, mask, query_embed, pos_embed, latent_input=None, proprio_input=None, additional_pos_embed=None):
+    def forward(self, src, mask, query_embed, pos_embed, latent_input=None, proprio_input=None, torque_input=None, lidar_input=None, additional_pos_embed=None):
         # TODO flatten only when input has H and W
         if len(src.shape) == 4: # has H and W
             # flatten NxCxHxW to HWxNxC
@@ -59,7 +59,26 @@ class Transformer(nn.Module):
             additional_pos_embed = additional_pos_embed.unsqueeze(1).repeat(1, bs, 1) # seq, bs, dim
             pos_embed = torch.cat([additional_pos_embed, pos_embed], axis=0)
 
-            addition_input = torch.stack([latent_input, proprio_input], axis=0)
+            # Handle torque_input: use zeros if not provided
+            if torque_input is None:
+                if proprio_input is not None:
+                    torque_input = torch.zeros_like(proprio_input).to(proprio_input.device)
+                elif latent_input is not None:
+                    torque_input = torch.zeros_like(latent_input).to(latent_input.device)
+                else:
+                    raise ValueError("At least one of latent_input or proprio_input must be provided")
+            
+            # Handle lidar_input: use zeros if not provided
+            if lidar_input is None:
+                if latent_input is not None:
+                    lidar_input = torch.zeros_like(latent_input).to(latent_input.device)
+                elif proprio_input is not None:
+                    lidar_input = torch.zeros_like(proprio_input).to(proprio_input.device)
+                else:
+                    raise ValueError("At least one of latent_input or proprio_input must be provided")
+            
+            # Stack additional inputs: latent, proprio, torque, lidar
+            addition_input = torch.stack([latent_input, proprio_input, torque_input, lidar_input], axis=0)
             src = torch.cat([addition_input, src], axis=0)
         else:
             assert len(src.shape) == 3

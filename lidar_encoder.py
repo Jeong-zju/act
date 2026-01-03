@@ -22,7 +22,7 @@ class LiDAREncoderConfig:
     
     # Preprocessing parameters
     r_min: float = 0.1  # Minimum valid range (meters)
-    r_max: float = 50.0  # Maximum valid range (meters)
+    r_max: float = 5.0  # Maximum valid range (meters)
     normalize_range: bool = True  # Whether to normalize range to [0, 1]
     epsilon: float = 1e-8  # Epsilon for numerical stability
     

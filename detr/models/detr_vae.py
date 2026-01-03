@@ -13,6 +13,18 @@ import numpy as np
 import IPython
 e = IPython.embed
 
+# Import LiDAREncoder
+try:
+    import sys
+    import os
+    # Add parent directory to path to import lidar_encoder
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
+    from lidar_encoder import LiDAREncoder, LiDAREncoderConfig
+except ImportError:
+    # Fallback if lidar_encoder is not available
+    LiDAREncoder = None
+    LiDAREncoderConfig = None
+
 
 def reparametrize(mu, logvar):
     std = logvar.div(2).exp()
@@ -33,7 +45,7 @@ def get_sinusoid_encoding_table(n_position, d_hid):
 
 class DETRVAE(nn.Module):
     """ This is the DETR module that performs object detection """
-    def __init__(self, backbones, transformer, encoder, state_dim, num_queries, camera_names):
+    def __init__(self, backbones, transformer, encoder, state_dim, num_queries, camera_names, use_lidar=False):
         """ Initializes the model.
         Parameters:
             backbones: torch module of the backbone to be used. See backbone.py
@@ -41,11 +53,13 @@ class DETRVAE(nn.Module):
             state_dim: robot state dimension of the environment
             num_queries: number of object queries, ie detection slot. This is the maximal number of objects
                          DETR can detect in a single image. For COCO, we recommend 100 queries.
-            aux_loss: True if auxiliary decoding losses (loss at each decoder layer) are to be used.
+            camera_names: list of camera names
+            use_lidar: whether to use LiDAR data (deprecated, lidar encoder is always registered)
         """
         super().__init__()
         self.num_queries = num_queries
         self.camera_names = camera_names
+        self.use_lidar = use_lidar
         self.transformer = transformer
         self.encoder = encoder
         hidden_dim = transformer.d_model
@@ -55,7 +69,7 @@ class DETRVAE(nn.Module):
         if backbones is not None:
             self.input_proj = nn.Conv2d(backbones[0].num_channels, hidden_dim, kernel_size=1)
             self.backbones = nn.ModuleList(backbones)
-            self.input_proj_robot_state = nn.Linear(14, hidden_dim)
+            self.input_proj_robot_state = nn.Linear(state_dim, hidden_dim)
         else:
             # input_dim = 14 + 7 # robot_state + env_state
             self.input_proj_robot_state = nn.Linear(14, hidden_dim)
@@ -66,40 +80,72 @@ class DETRVAE(nn.Module):
         # encoder extra parameters
         self.latent_dim = 32 # final size of latent z # TODO tune
         self.cls_embed = nn.Embedding(1, hidden_dim) # extra cls token embedding
-        self.encoder_action_proj = nn.Linear(14, hidden_dim) # project action to embedding
-        self.encoder_joint_proj = nn.Linear(14, hidden_dim)  # project qpos to embedding
+        self.encoder_action_proj = nn.Linear(state_dim, hidden_dim) # project action to embedding
+        self.encoder_joint_proj = nn.Linear(state_dim, hidden_dim)  # project qpos to embedding
+        self.encoder_torque_proj = nn.Linear(state_dim, hidden_dim)  # project qtor to embedding
         self.latent_proj = nn.Linear(hidden_dim, self.latent_dim*2) # project hidden state to latent std, var
-        self.register_buffer('pos_table', get_sinusoid_encoding_table(1+1+num_queries, hidden_dim)) # [CLS], qpos, a_seq
+        self.register_buffer('pos_table', get_sinusoid_encoding_table(1+1+1+num_queries, hidden_dim)) # [CLS], qpos, qtor, a_seq
 
         # decoder extra parameters
         self.latent_out_proj = nn.Linear(self.latent_dim, hidden_dim) # project latent sample to embedding
-        self.additional_pos_embed = nn.Embedding(2, hidden_dim) # learned position embedding for proprio and latent
+        self.input_proj_robot_torque = nn.Linear(state_dim, hidden_dim)  # project qtor to embedding for decoder
+        # LiDAR encoder - always register
+        if LiDAREncoder is not None:
+            lidar_config = LiDAREncoderConfig(embedding_dim=hidden_dim)
+            self.lidar_encoder = LiDAREncoder(lidar_config)
+        else:
+            self.lidar_encoder = None
+        # Position embedding count: latent, proprio, torque, lidar (always 4)
+        self.additional_pos_embed = nn.Embedding(4, hidden_dim) # learned position embedding for latent, proprio, torque, and lidar
 
-    def forward(self, qpos, image, env_state, actions=None, is_pad=None):
+    def forward(self, qpos, image, env_state, actions=None, is_pad=None, qtor=None, lidar_scan=None):
         """
         qpos: batch, qpos_dim
         image: batch, num_cam, channel, height, width
         env_state: None
         actions: batch, seq, action_dim
+        qtor: batch, qtor_dim (torque data)
+        lidar_scan: batch, num_beams (LiDAR scan distances)
         """
         is_training = actions is not None # train or val
         bs, _ = qpos.shape
+        
+        # Handle qtor: use zeros if not provided
+        if qtor is None:
+            qtor = torch.zeros_like(qpos).to(qpos.device)
+        
+        # Handle lidar_scan: always encode, fill with zeros if None
+        if self.lidar_encoder is not None:
+            if lidar_scan is not None:
+                # Encode LiDAR scan: (bs, num_beams) -> (bs, hidden_dim)
+                lidar_input = self.lidar_encoder(lidar_scan, training=is_training)  # (bs, hidden_dim)
+            else:
+                # Fill with zeros if lidar_scan is None, then encode
+                # Default to 1080 beams (common LiDAR size)
+                zero_lidar = torch.zeros((bs, 1080), dtype=torch.float32).to(qpos.device)
+                lidar_input = self.lidar_encoder(zero_lidar, training=is_training)  # (bs, hidden_dim)
+        else:
+            # Fallback if LiDAREncoder is not available
+            lidar_input = torch.zeros((bs, self.transformer.d_model), dtype=torch.float32).to(qpos.device)
+        
         ### Obtain latent z from action sequence
         if is_training:
             # project action sequence to embedding dim, and concat with a CLS token
             action_embed = self.encoder_action_proj(actions) # (bs, seq, hidden_dim)
             qpos_embed = self.encoder_joint_proj(qpos)  # (bs, hidden_dim)
             qpos_embed = torch.unsqueeze(qpos_embed, axis=1)  # (bs, 1, hidden_dim)
+            qtor_embed = self.encoder_torque_proj(qtor)  # (bs, hidden_dim)
+            qtor_embed = torch.unsqueeze(qtor_embed, axis=1)  # (bs, 1, hidden_dim)
             cls_embed = self.cls_embed.weight # (1, hidden_dim)
             cls_embed = torch.unsqueeze(cls_embed, axis=0).repeat(bs, 1, 1) # (bs, 1, hidden_dim)
-            encoder_input = torch.cat([cls_embed, qpos_embed, action_embed], axis=1) # (bs, seq+1, hidden_dim)
-            encoder_input = encoder_input.permute(1, 0, 2) # (seq+1, bs, hidden_dim)
-            # do not mask cls token
-            cls_joint_is_pad = torch.full((bs, 2), False).to(qpos.device) # False: not a padding
-            is_pad = torch.cat([cls_joint_is_pad, is_pad], axis=1)  # (bs, seq+1)
+            encoder_input = torch.cat([cls_embed, qpos_embed, qtor_embed, action_embed], axis=1) # (bs, seq+3, hidden_dim)
+            encoder_input = encoder_input.permute(1, 0, 2) # (seq+3, bs, hidden_dim)
+            # do not mask cls token, qpos, or qtor
+            cls_joint_torque_is_pad = torch.full((bs, 3), False).to(qpos.device) # False: not a padding
+            is_pad = torch.cat([cls_joint_torque_is_pad, is_pad], axis=1)  # (bs, seq+3)
             # obtain position embedding
             pos_embed = self.pos_table.clone().detach()
-            pos_embed = pos_embed.permute(1, 0, 2)  # (seq+1, 1, hidden_dim)
+            pos_embed = pos_embed.permute(1, 0, 2)  # (seq+3, 1, hidden_dim)
             # query model
             encoder_output = self.encoder(encoder_input, pos=pos_embed, src_key_padding_mask=is_pad)
             encoder_output = encoder_output[0] # take cls output only
@@ -125,10 +171,12 @@ class DETRVAE(nn.Module):
                 all_cam_pos.append(pos)
             # proprioception features
             proprio_input = self.input_proj_robot_state(qpos)
+            # torque features
+            torque_input = self.input_proj_robot_torque(qtor)
             # fold camera dimension into width dimension
             src = torch.cat(all_cam_features, axis=3)
             pos = torch.cat(all_cam_pos, axis=3)
-            hs = self.transformer(src, None, self.query_embed.weight, pos, latent_input, proprio_input, self.additional_pos_embed.weight)[0]
+            hs = self.transformer(src, None, self.query_embed.weight, pos, latent_input, proprio_input, torque_input, lidar_input, self.additional_pos_embed.weight)[0]
         else:
             qpos = self.input_proj_robot_state(qpos)
             env_state = self.input_proj_env_state(env_state)
@@ -171,12 +219,13 @@ class CNNMLP(nn.Module):
         else:
             raise NotImplementedError
 
-    def forward(self, qpos, image, env_state, actions=None):
+    def forward(self, qpos, image, env_state, actions=None, qtor=None):
         """
         qpos: batch, qpos_dim
         image: batch, num_cam, channel, height, width
         env_state: None
         actions: batch, seq, action_dim
+        qtor: batch, qtor_dim (torque data, optional)
         """
         is_training = actions is not None # train or val
         bs, _ = qpos.shape
@@ -193,6 +242,7 @@ class CNNMLP(nn.Module):
             flattened_features.append(cam_feature.reshape([bs, -1]))
         flattened_features = torch.cat(flattened_features, axis=1) # 768 each
         features = torch.cat([flattened_features, qpos], axis=1) # qpos: 14
+        # Note: qtor is accepted but not used in CNNMLP for now
         a_hat = self.mlp(features)
         return a_hat
 
@@ -227,7 +277,8 @@ def build_encoder(args):
 
 
 def build(args):
-    state_dim = 14 # TODO hardcode
+    state_dim = args.state_dim # TODO hardcode
+    use_lidar = getattr(args, 'use_lidar', False)
 
     # From state
     # backbone = None # from state for now, no need for conv nets
@@ -247,6 +298,7 @@ def build(args):
         state_dim=state_dim,
         num_queries=args.num_queries,
         camera_names=args.camera_names,
+        use_lidar=use_lidar,
     )
 
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
