@@ -2,22 +2,18 @@ import numpy as np
 import torch
 import os
 import h5py
-import json
-from pathlib import Path
-from typing import Dict, Iterable, List, Optional
 from torch.utils.data import TensorDataset, DataLoader
 
 import IPython
 e = IPython.embed
 
 class EpisodicDataset(torch.utils.data.Dataset):
-    def __init__(self, episode_ids, dataset_dir, camera_names, norm_stats, action_horizon=None):
+    def __init__(self, episode_ids, dataset_dir, camera_names, norm_stats):
         super(EpisodicDataset).__init__()
         self.episode_ids = episode_ids
         self.dataset_dir = dataset_dir
         self.camera_names = camera_names
         self.norm_stats = norm_stats
-        self.action_horizon = action_horizon
         self.is_sim = None
         self.__getitem__(0) # initialize self.is_sim
 
@@ -28,22 +24,11 @@ class EpisodicDataset(torch.utils.data.Dataset):
         sample_full_episode = False # hardcode
 
         episode_id = self.episode_ids[index]
-        def _episode_hdf5_path(dataset_dir: str, episode_idx: int) -> str:
-            # Prefer non-padded naming (ACT sim datasets), but also support 6-digit padded naming.
-            p1 = os.path.join(dataset_dir, f"episode_{episode_idx}.hdf5")
-            if os.path.exists(p1):
-                return p1
-            p2 = os.path.join(dataset_dir, f"episode_{episode_idx:06d}.hdf5")
-            if os.path.exists(p2):
-                return p2
-            return p1
-        # dataset_path = os.path.join(self.dataset_dir, f'episode_{episode_id}.hdf5')
-        dataset_path = _episode_hdf5_path(self.dataset_dir, episode_id)
+        dataset_path = os.path.join(self.dataset_dir, f'episode_{episode_id}.hdf5')
         with h5py.File(dataset_path, 'r') as root:
             is_sim = root.attrs['sim']
             original_action_shape = root['/action'].shape
             episode_len = original_action_shape[0]
-            action_dim = original_action_shape[1]
             if sample_full_episode:
                 start_ts = 0
             else:
@@ -51,27 +36,21 @@ class EpisodicDataset(torch.utils.data.Dataset):
             # get observation at start_ts only
             qpos = root['/observations/qpos'][start_ts]
             qvel = root['/observations/qvel'][start_ts]
-            # load qtor if available, otherwise use zeros
-            if '/observations/qtor' in root:
-                qtor = root['/observations/qtor'][start_ts]
-            else:
-                qtor = np.zeros_like(qpos)
             image_dict = dict()
             for cam_name in self.camera_names:
                 image_dict[cam_name] = root[f'/observations/images/{cam_name}'][start_ts]
             # get all actions after and including start_ts
             if is_sim:
                 action = root['/action'][start_ts:]
+                action_len = episode_len - start_ts
             else:
                 action = root['/action'][max(0, start_ts - 1):] # hack, to make timesteps more aligned
+                action_len = episode_len - max(0, start_ts - 1) # hack, to make timesteps more aligned
 
         self.is_sim = is_sim
-        horizon = int(self.action_horizon) if self.action_horizon is not None else episode_len
-        action = action[:horizon]
-        action_len = action.shape[0]
-        padded_action = np.zeros((horizon, action_dim), dtype=np.float32)
+        padded_action = np.zeros(original_action_shape, dtype=np.float32)
         padded_action[:action_len] = action
-        is_pad = np.zeros(horizon)
+        is_pad = np.zeros(episode_len)
         is_pad[action_len:] = 1
 
         # new axis for different cameras
@@ -83,8 +62,6 @@ class EpisodicDataset(torch.utils.data.Dataset):
         # construct observations
         image_data = torch.from_numpy(all_cam_images)
         qpos_data = torch.from_numpy(qpos).float()
-        qvel_data = torch.from_numpy(qvel).float()
-        qtor_data = torch.from_numpy(qtor).float()
         action_data = torch.from_numpy(padded_action).float()
         is_pad = torch.from_numpy(is_pad).bool()
 
@@ -95,96 +72,43 @@ class EpisodicDataset(torch.utils.data.Dataset):
         image_data = image_data / 255.0
         action_data = (action_data - self.norm_stats["action_mean"]) / self.norm_stats["action_std"]
         qpos_data = (qpos_data - self.norm_stats["qpos_mean"]) / self.norm_stats["qpos_std"]
-        qvel_data = (qvel_data - self.norm_stats["qvel_mean"]) / self.norm_stats["qvel_std"]
-        # normalize qtor if stats available, otherwise use raw values
-        if "qtor_mean" in self.norm_stats and "qtor_std" in self.norm_stats:
-            qtor_data = (qtor_data - self.norm_stats["qtor_mean"]) / self.norm_stats["qtor_std"]
-        else:
-            # if no normalization stats, use raw values (assumes already normalized or will be handled elsewhere)
-            pass
 
-        return image_data, qpos_data, qvel_data, qtor_data, action_data, is_pad
+        return image_data, qpos_data, action_data, is_pad
 
 
 def get_norm_stats(dataset_dir, num_episodes):
-    def _episode_hdf5_path(ep_idx: int) -> str:
-        # Prefer non-padded naming (ACT sim datasets), but also support 6-digit padded naming.
-        p1 = os.path.join(dataset_dir, f"episode_{ep_idx}.hdf5")
-        if os.path.exists(p1):
-            return p1
-        p2 = os.path.join(dataset_dir, f"episode_{ep_idx:06d}.hdf5")
-        if os.path.exists(p2):
-            return p2
-        return p1
-
     all_qpos_data = []
-    all_qvel_data = []
-    all_qtor_data = []
     all_action_data = []
-    example_qpos = None
-    has_qtor = False
     for episode_idx in range(num_episodes):
-        dataset_path = _episode_hdf5_path(episode_idx)
-        with h5py.File(dataset_path, "r") as root:
-            qpos = root["/observations/qpos"][()]
-            qvel = root["/observations/qvel"][()]
-            action = root["/action"][()]
-            if '/observations/qtor' in root:
-                qtor = root["/observations/qtor"][()]
-                has_qtor = True  # Mark that we found actual qtor data
-            else:
-                qtor = np.zeros_like(qpos)
+        dataset_path = os.path.join(dataset_dir, f'episode_{episode_idx}.hdf5')
+        with h5py.File(dataset_path, 'r') as root:
+            qpos = root['/observations/qpos'][()]
+            qvel = root['/observations/qvel'][()]
+            action = root['/action'][()]
         all_qpos_data.append(torch.from_numpy(qpos))
-        all_qvel_data.append(torch.from_numpy(qvel))
-        all_qtor_data.append(torch.from_numpy(qtor))
         all_action_data.append(torch.from_numpy(action))
-        example_qpos = qpos
-
-    # Episodes can have different lengths, so concatenate along time.
-    all_qpos_data = torch.cat(all_qpos_data, dim=0)
-    all_qvel_data = torch.cat(all_qvel_data, dim=0)
-    all_action_data = torch.cat(all_action_data, dim=0)
-    all_qtor_data = torch.cat(all_qtor_data, dim=0)
+    all_qpos_data = torch.stack(all_qpos_data)
+    all_action_data = torch.stack(all_action_data)
+    all_action_data = all_action_data
 
     # normalize action data
-    action_mean = all_action_data.mean(dim=0, keepdim=True)
-    action_std = all_action_data.std(dim=0, keepdim=True, unbiased=False)
-    action_std = torch.clip(action_std, 1e-2, np.inf)  # clipping
+    action_mean = all_action_data.mean(dim=[0, 1], keepdim=True)
+    action_std = all_action_data.std(dim=[0, 1], keepdim=True)
+    action_std = torch.clip(action_std, 1e-2, np.inf) # clipping
 
     # normalize qpos data
-    qpos_mean = all_qpos_data.mean(dim=0, keepdim=True)
-    qpos_std = all_qpos_data.std(dim=0, keepdim=True, unbiased=False)
-    qpos_std = torch.clip(qpos_std, 1e-2, np.inf)  # clipping
+    qpos_mean = all_qpos_data.mean(dim=[0, 1], keepdim=True)
+    qpos_std = all_qpos_data.std(dim=[0, 1], keepdim=True)
+    qpos_std = torch.clip(qpos_std, 1e-2, np.inf) # clipping
 
-    qvel_mean = all_qvel_data.mean(dim=0, keepdim=True)
-    qvel_std = all_qvel_data.std(dim=0, keepdim=True, unbiased=False)
-    qvel_std = torch.clip(qvel_std, 1e-2, np.inf)  # clipping
+    stats = {"action_mean": action_mean.numpy().squeeze(), "action_std": action_std.numpy().squeeze(),
+             "qpos_mean": qpos_mean.numpy().squeeze(), "qpos_std": qpos_std.numpy().squeeze(),
+             "example_qpos": qpos}
 
-    stats = {
-        "action_mean": action_mean.numpy().squeeze(),
-        "action_std": action_std.numpy().squeeze(),
-        "qpos_mean": qpos_mean.numpy().squeeze(),
-        "qpos_std": qpos_std.numpy().squeeze(),
-        "qvel_mean": qvel_mean.numpy().squeeze(),
-        "qvel_std": qvel_std.numpy().squeeze(),
-        "example_qpos": example_qpos,
-    }
-    
-    # Only compute qtor stats if dataset actually contains qtor data
-    # This ensures backward compatibility: old models trained without qtor 
-    # will have stats without qtor_mean/qtor_std, and eval will use zeros
-    if has_qtor:
-        # normalize qtor data
-        qtor_mean = all_qtor_data.mean(dim=0, keepdim=True)
-        qtor_std = all_qtor_data.std(dim=0, keepdim=True, unbiased=False)
-        qtor_std = torch.clip(qtor_std, 1e-2, np.inf)  # clipping
-        stats["qtor_mean"] = qtor_mean.numpy().squeeze()
-        stats["qtor_std"] = qtor_std.numpy().squeeze()
-    
     return stats
 
 
-def load_data(dataset_dir, num_episodes, camera_names, batch_size_train, batch_size_val, action_horizon=None):
+def load_data(dataset_dir, num_episodes, camera_names, batch_size_train, batch_size_val):
     print(f'\nData from: {dataset_dir}\n')
     # obtain train test split
     train_ratio = 0.8
@@ -196,8 +120,8 @@ def load_data(dataset_dir, num_episodes, camera_names, batch_size_train, batch_s
     norm_stats = get_norm_stats(dataset_dir, num_episodes)
 
     # construct dataset and dataloader
-    train_dataset = EpisodicDataset(train_indices, dataset_dir, camera_names, norm_stats, action_horizon=action_horizon)
-    val_dataset = EpisodicDataset(val_indices, dataset_dir, camera_names, norm_stats, action_horizon=action_horizon)
+    train_dataset = EpisodicDataset(train_indices, dataset_dir, camera_names, norm_stats)
+    val_dataset = EpisodicDataset(val_indices, dataset_dir, camera_names, norm_stats)
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size_train, shuffle=True, pin_memory=True, num_workers=1, prefetch_factor=1)
     val_dataloader = DataLoader(val_dataset, batch_size=batch_size_val, shuffle=True, pin_memory=True, num_workers=1, prefetch_factor=1)
 

@@ -21,4 +21,3 @@ dependencies:
   - packaging=23.0
   - h5py=3.8.0
   - ipython=8.12.0
-  - tqdm=4.64.1

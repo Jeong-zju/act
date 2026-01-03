@@ -5,7 +5,6 @@ from pathlib import Path
 import numpy as np
 import torch
 from .models import build_ACT_model, build_CNNMLP_model
-from .models.detr_vae import build_lidar
 
 import IPython
 e = IPython.embed
@@ -64,8 +63,6 @@ def get_args_parser():
     parser.add_argument('--kl_weight', action='store', type=int, help='KL Weight', required=False)
     parser.add_argument('--chunk_size', action='store', type=int, help='chunk_size', required=False)
     parser.add_argument('--temporal_agg', action='store_true')
-    parser.add_argument('--use_lidar', action='store_true', help='Use LiDAR-enabled training and evaluation')
-    parser.add_argument('--use_torque', action='store_true', help='Use qtor as input (first 3 values set to zero); if false, set all values to zero')
 
     return parser
 
@@ -108,52 +105,6 @@ def build_CNNMLP_model_and_optimizer(args_override):
         {
             "params": [p for n, p in model.named_parameters() if "backbone" in n and p.requires_grad],
             "lr": args.lr_backbone,
-        },
-    ]
-    optimizer = torch.optim.AdamW(param_dicts, lr=args.lr,
-                                  weight_decay=args.weight_decay)
-
-    return model, optimizer
-
-
-def build_ACT_model_and_optimizer_lidar(args_override):
-    """Build ACT model with LiDAR support."""
-    parser = argparse.ArgumentParser('DETR training and evaluation script', parents=[get_args_parser()])
-    args = parser.parse_args()
-
-    for k, v in args_override.items():
-        setattr(args, k, v)
-
-    # Get LiDAR config from args_override if provided
-    lidar_config = args_override.get('lidar_config', None)
-    
-    model = build_lidar(args, lidar_config=lidar_config)
-    model.cuda()
-
-    # Collect parameters into mutually exclusive groups
-    backbone_params = []
-    lidar_params = []
-    other_params = []
-    
-    for n, p in model.named_parameters():
-        if not p.requires_grad:
-            continue
-        if "backbone" in n:
-            backbone_params.append(p)
-        elif "lidar_encoder" in n:
-            lidar_params.append(p)
-        else:
-            other_params.append(p)
-    
-    param_dicts = [
-        {"params": other_params},
-        {
-            "params": backbone_params,
-            "lr": args.lr_backbone,
-        },
-        {
-            "params": lidar_params,
-            "lr": args_override.get('lr_lidar', args.lr),  # Use separate LR for LiDAR encoder if provided
         },
     ]
     optimizer = torch.optim.AdamW(param_dicts, lr=args.lr,

@@ -46,7 +46,7 @@ class Transformer(nn.Module):
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
 
-    def forward(self, src, mask, query_embed, pos_embed, latent_input=None, proprio_input=None, torque_input=None, additional_pos_embed=None):
+    def forward(self, src, mask, query_embed, pos_embed, latent_input=None, proprio_input=None, additional_pos_embed=None):
         # TODO flatten only when input has H and W
         if len(src.shape) == 4: # has H and W
             # flatten NxCxHxW to HWxNxC
@@ -59,7 +59,7 @@ class Transformer(nn.Module):
             additional_pos_embed = additional_pos_embed.unsqueeze(1).repeat(1, bs, 1) # seq, bs, dim
             pos_embed = torch.cat([additional_pos_embed, pos_embed], axis=0)
 
-            addition_input = torch.stack([latent_input, proprio_input, torque_input], axis=0)
+            addition_input = torch.stack([latent_input, proprio_input], axis=0)
             src = torch.cat([addition_input, src], axis=0)
         else:
             assert len(src.shape) == 3
@@ -290,87 +290,8 @@ def _get_clones(module, N):
     return nn.ModuleList([copy.deepcopy(module) for i in range(N)])
 
 
-class Transformer_Lidar(nn.Module):
-    """Transformer with LiDAR support. Copy of Transformer with lidar_input parameter."""
-
-    def __init__(self, d_model=512, nhead=8, num_encoder_layers=6,
-                 num_decoder_layers=6, dim_feedforward=2048, dropout=0.1,
-                 activation="relu", normalize_before=False,
-                 return_intermediate_dec=False):
-        super().__init__()
-
-        encoder_layer = TransformerEncoderLayer(d_model, nhead, dim_feedforward,
-                                                dropout, activation, normalize_before)
-        encoder_norm = nn.LayerNorm(d_model) if normalize_before else None
-        self.encoder = TransformerEncoder(encoder_layer, num_encoder_layers, encoder_norm)
-
-        decoder_layer = TransformerDecoderLayer(d_model, nhead, dim_feedforward,
-                                                dropout, activation, normalize_before)
-        decoder_norm = nn.LayerNorm(d_model)
-        self.decoder = TransformerDecoder(decoder_layer, num_decoder_layers, decoder_norm,
-                                          return_intermediate=return_intermediate_dec)
-
-        self._reset_parameters()
-
-        self.d_model = d_model
-        self.nhead = nhead
-
-    def _reset_parameters(self):
-        for p in self.parameters():
-            if p.dim() > 1:
-                nn.init.xavier_uniform_(p)
-
-    def forward(self, src, mask, query_embed, pos_embed, latent_input=None, proprio_input=None, torque_input=None, lidar_input=None, additional_pos_embed=None):
-        # TODO flatten only when input has H and W
-        if len(src.shape) == 4: # has H and W
-            # flatten NxCxHxW to HWxNxC
-            bs, c, h, w = src.shape
-            src = src.flatten(2).permute(2, 0, 1)
-            pos_embed = pos_embed.flatten(2).permute(2, 0, 1).repeat(1, bs, 1)
-            query_embed = query_embed.unsqueeze(1).repeat(1, bs, 1)
-            # mask = mask.flatten(1)
-
-            additional_pos_embed = additional_pos_embed.unsqueeze(1).repeat(1, bs, 1) # seq, bs, dim
-            pos_embed = torch.cat([additional_pos_embed, pos_embed], axis=0)
-
-            # Stack additional inputs (latent, proprio, torque, and optionally lidar)
-            if lidar_input is not None:
-                addition_input = torch.stack([latent_input, proprio_input, torque_input, lidar_input], axis=0)
-            else:
-                addition_input = torch.stack([latent_input, proprio_input, torque_input], axis=0)
-            src = torch.cat([addition_input, src], axis=0)
-        else:
-            assert len(src.shape) == 3
-            # flatten NxHWxC to HWxNxC
-            bs, hw, c = src.shape
-            src = src.permute(1, 0, 2)
-            pos_embed = pos_embed.unsqueeze(1).repeat(1, bs, 1)
-            query_embed = query_embed.unsqueeze(1).repeat(1, bs, 1)
-
-        tgt = torch.zeros_like(query_embed)
-        memory = self.encoder(src, src_key_padding_mask=mask, pos=pos_embed)
-        hs = self.decoder(tgt, memory, memory_key_padding_mask=mask,
-                          pos=pos_embed, query_pos=query_embed)
-        hs = hs.transpose(1, 2)
-        return hs
-
-
 def build_transformer(args):
     return Transformer(
-        d_model=args.hidden_dim,
-        dropout=args.dropout,
-        nhead=args.nheads,
-        dim_feedforward=args.dim_feedforward,
-        num_encoder_layers=args.enc_layers,
-        num_decoder_layers=args.dec_layers,
-        normalize_before=args.pre_norm,
-        return_intermediate_dec=True,
-    )
-
-
-def build_transformer_lidar(args):
-    """Build transformer with LiDAR support."""
-    return Transformer_Lidar(
         d_model=args.hidden_dim,
         dropout=args.dropout,
         nhead=args.nheads,
