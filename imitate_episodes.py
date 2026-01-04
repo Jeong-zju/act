@@ -34,6 +34,7 @@ def main(args):
     num_epochs = args['num_epochs']
     use_qtor = args.get('use_qtor', False)
     use_lidar = args.get('use_lidar', False)
+    mix = args.get('mix', False)
 
     # get task parameters
     is_sim = task_name[:4] == 'sim_'
@@ -91,7 +92,9 @@ def main(args):
         'camera_names': camera_names,
         'real_robot': not is_sim,
         'use_qtor': use_qtor,
-        'use_lidar': use_lidar
+        'use_lidar': use_lidar,
+        'mix': mix,
+        'state_dim': state_dim
     }
 
     if is_eval:
@@ -106,7 +109,7 @@ def main(args):
         print()
         exit()
 
-    train_dataloader, val_dataloader, stats, _ = load_data(dataset_dir, num_episodes, camera_names, batch_size_train, batch_size_val, use_qtor=use_qtor, use_lidar=use_lidar)
+    train_dataloader, val_dataloader, stats, _ = load_data(dataset_dir, num_episodes, camera_names, batch_size_train, batch_size_val, use_qtor=use_qtor, use_lidar=use_lidar, mix=mix, state_dim=state_dim)
 
     # save dataset stats
     if not os.path.isdir(ckpt_dir):
@@ -168,6 +171,8 @@ def eval_bc(config, ckpt_name, save_episode=True):
     temporal_agg = config['temporal_agg']
     use_qtor = config.get('use_qtor', False)
     use_lidar = config.get('use_lidar', False)
+    mix = config.get('mix', False)
+    state_dim = config['state_dim']
     onscreen_cam = 'angle'
 
     # load policy and stats
@@ -236,19 +241,34 @@ def eval_bc(config, ckpt_name, save_episode=True):
             return padded
     
     def pre_process(s_qpos):
-        """Preprocess qpos: pad if needed, then normalize."""
+        """Preprocess qpos: pad if needed, handle mix parameter, then normalize."""
         s_qpos_padded = pad_qpos(s_qpos, target_dim=17)
+        # Handle mix parameter for state_dim==17: set or replace first 3 values
+        if state_dim == 17:
+            if mix:
+                # Mix is handled before calling pre_process (qvel[:3] replaces qpos[:3])
+                # Here we just ensure the padded version maintains the mix
+                pass  # Mix already applied to s_qpos before padding
+            else:
+                # Set first 3 values to zeros (ignore base position)
+                if isinstance(s_qpos_padded, torch.Tensor):
+                    s_qpos_padded = s_qpos_padded.clone()
+                    s_qpos_padded[..., :3] = 0.0
+                else:
+                    s_qpos_padded = s_qpos_padded.copy()
+                    s_qpos_padded[..., :3] = 0.0
         return (s_qpos_padded - stats['qpos_mean']) / stats['qpos_std']
     
     def post_process(a):
-        """Post-process action: pad if needed, denormalize, then remove padding for environment."""
+        """Post-process action: pad if needed, denormalize, then remove padding for environment if needed."""
         # Pad action if it's 14D (for backward compatibility with old policies)
         if a.shape[-1] < 17:
             a = pad_qpos(a, target_dim=17)
         # Denormalize
         a_denorm = a * stats['action_std'] + stats['action_mean']
-        # Remove padding to get back to 14D for environment
-        if a_denorm.shape[-1] == 17:
+        # Remove padding to get back to 14D for environment only if state_dim != 17
+        # (mobile environments need 17D: 3 base velocities + 14 arm/gripper)
+        if a_denorm.shape[-1] == 17 and state_dim != 17:
             a_denorm = a_denorm[..., 3:]  # Remove first 3 padded zeros
         return a_denorm
 
@@ -314,6 +334,15 @@ def eval_bc(config, ckpt_name, save_episode=True):
                 else:
                     image_list.append({'main': obs['image']})
                 qpos_numpy = np.array(obs['qpos'])
+                # Handle mix parameter for state_dim==17: set or replace first 3 values
+                # Note: This is done before padding, but the actual zero-setting happens in pre_process after padding
+                if state_dim == 17:
+                    if mix:
+                        # Replace first 3 values (base position) with qvel[:3] (base velocity)
+                        qvel_numpy = np.array(obs['qvel'])
+                        qpos_numpy = qpos_numpy.copy()  # Make a copy to avoid modifying original
+                        qpos_numpy[:3] = qvel_numpy[:3]
+                    # If not mix, qpos_numpy stays as-is (will be zeroed in pre_process after padding)
                 qpos = pre_process(qpos_numpy)
                 qpos = torch.from_numpy(qpos).float().cuda().unsqueeze(0)
                 qpos_history[:, t] = qpos
@@ -525,5 +554,6 @@ if __name__ == '__main__':
     parser.add_argument('--temporal_agg', action='store_true')
     parser.add_argument('--use_qtor', action='store_true', help='Use qtor (torque) data from dataset')
     parser.add_argument('--use_lidar', action='store_true', help='Use lidar_scan data from dataset')
+    parser.add_argument('--mix', action='store_true', help='Replace first 3 values in qpos with first 3 values in qvel (when state_dim==17)')
     
     main(vars(parser.parse_args()))

@@ -1,3 +1,4 @@
+import torch
 import torch.nn as nn
 from torch.nn import functional as F
 import torchvision.transforms as transforms
@@ -13,7 +14,8 @@ class ACTPolicy(nn.Module):
         self.model = model # CVAE decoder
         self.optimizer = optimizer
         self.kl_weight = args_override['kl_weight']
-        print(f'KL Weight {self.kl_weight}')
+        self.state_dim = args_override.get('state_dim', 14)  # Default to 14 for backward compatibility
+        print(f'KL Weight {self.kl_weight}, State Dim {self.state_dim}')
 
     def __call__(self, qpos, image, actions=None, is_pad=None, qtor=None, lidar_scan=None):
         env_state = None
@@ -28,7 +30,30 @@ class ACTPolicy(nn.Module):
             total_kld, dim_wise_kld, mean_kld = kl_divergence(mu, logvar)
             loss_dict = dict()
             all_l1 = F.l1_loss(actions, a_hat, reduction='none')
+            
+            # # Apply dimension-wise weights only for mobile manipulation (state_dim==17)
+            # # Higher weight for base velocities (first 3 dims: vx, vy, omega)
+            # # This ensures model pays attention to base control which is critical for mobile manipulation
+            # if self.state_dim == 17:
+            #     base_weight = 10.0  # Weight for vx, vy, omega
+            #     arm_weight = 1.0  # Weight for arm joints and grippers
+            #     weights = torch.ones_like(actions)
+            #     weights[..., :3] = base_weight  # First 3 dimensions (base velocities)
+            #     weights[..., 3:] = arm_weight  # Remaining dimensions (arms)
+            #     l1_old = (all_l1 * weights * ~is_pad.unsqueeze(-1)).mean()
+                
+            #     # Separate losses for monitoring
+            #     base_vel_l1 = (all_l1[..., :3] * base_weight * ~is_pad.unsqueeze(-1)).mean()
+            #     arm_l1 = (all_l1[..., 3:] * arm_weight * ~is_pad.unsqueeze(-1)).mean()
+            #     loss_dict['base_vel_l1'] = base_vel_l1
+            #     loss_dict['arm_l1'] = arm_l1
+            #     l1 = base_vel_l1 + arm_l1
+            # else:
+            #     # Standard uniform weighting for non-mobile tasks
+            #     l1 = (all_l1 * ~is_pad.unsqueeze(-1)).mean()
+
             l1 = (all_l1 * ~is_pad.unsqueeze(-1)).mean()
+            
             loss_dict['l1'] = l1
             loss_dict['kl'] = total_kld[0]
             loss_dict['loss'] = loss_dict['l1'] + loss_dict['kl'] * self.kl_weight

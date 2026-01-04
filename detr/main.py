@@ -65,6 +65,8 @@ def get_args_parser():
     parser.add_argument('--temporal_agg', action='store_true')
 
     parser.add_argument('--use_qtor', action='store_true', help='Use qtor (torque) data from dataset')
+    parser.add_argument('--use_lidar', action='store_true', help='Use lidar_scan data from dataset')
+    parser.add_argument('--mix', action='store_true', help='Replace first 3 values in qpos with first 3 values in qvel (when state_dim==17)')
 
     return parser
 

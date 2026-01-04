@@ -206,6 +206,7 @@ class MobileDualPiperTaskPiper():
     
     def __init__(self, enable_qtor=False):
         self.enable_qtor = enable_qtor
+        self.max_reward = 4
 
     @staticmethod
     def get_qpos(data):

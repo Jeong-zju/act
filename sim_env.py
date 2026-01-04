@@ -12,6 +12,12 @@ from constants import MASTER_GRIPPER_POSITION_NORMALIZE_FN
 from constants import PUPPET_GRIPPER_POSITION_NORMALIZE_FN
 from constants import PUPPET_GRIPPER_VELOCITY_NORMALIZE_FN
 
+from piper_sim_env import PiperCubeTransferEnvironment, PiperInsertionEnvironment, MobileDualPiperEnvironment
+from piper_sim_task import TransferCubeTaskPiper, InsertionTaskPiper, MobileDualPiperTaskPiper
+
+from mujoco_lidar import MjLidarWrapper
+from mujoco_lidar import scan_gen
+
 import IPython
 e = IPython.embed
 
@@ -47,6 +53,21 @@ def make_sim_env(task_name):
         task = InsertionTask(random=False)
         env = control.Environment(physics, task, time_limit=20, control_timestep=DT,
                                   n_sub_steps=None, flat_observation=False)
+    elif 'sim_mobile_transfer_cube' in task_name:
+        model = mujoco.MjModel.from_xml_path(os.path.join(XML_DIR, f'mobile_piper.xml'))
+        data = mujoco.MjData(model)
+        num_beams = 360
+        rays_theta, rays_phi = scan_gen.create_lidar_single_line(num_beams)
+        exclude_body_id = model.body("lidar_base").id
+        lidar = MjLidarWrapper(
+            model,
+            site_name="lidar_site",
+            backend="cpu",  # Use CPU backend
+            cutoff_dist=50.0,  # Maximum detection distance of 50 meters
+            args={'bodyexclude': exclude_body_id}  # CPU backend specific parameter: exclude body
+        )
+        task = MobileDualPiperTaskPiper()
+        env = MobileDualPiperEnvironment(model, data, task, lidar=lidar, rays_theta=rays_theta, rays_phi=rays_phi)
     else:
         raise NotImplementedError
     return env

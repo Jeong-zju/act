@@ -78,7 +78,7 @@ class DETRVAE(nn.Module):
             self.backbones = None
 
         # encoder extra parameters
-        self.latent_dim = 32 # final size of latent z # TODO tune
+        self.latent_dim = 64 # final size of latent z # TODO tune
         self.cls_embed = nn.Embedding(1, hidden_dim) # extra cls token embedding
         self.encoder_action_proj = nn.Linear(state_dim, hidden_dim) # project action to embedding
         self.encoder_joint_proj = nn.Linear(state_dim, hidden_dim)  # project qpos to embedding
@@ -89,13 +89,13 @@ class DETRVAE(nn.Module):
         # decoder extra parameters
         self.latent_out_proj = nn.Linear(self.latent_dim, hidden_dim) # project latent sample to embedding
         self.input_proj_robot_torque = nn.Linear(state_dim, hidden_dim)  # project qtor to embedding for decoder
-        # LiDAR encoder - always register
-        if LiDAREncoder is not None:
+        # LiDAR encoder - only register if use_lidar is True
+        if use_lidar and LiDAREncoder is not None:
             lidar_config = LiDAREncoderConfig(embedding_dim=hidden_dim)
             self.lidar_encoder = LiDAREncoder(lidar_config)
         else:
             self.lidar_encoder = None
-        # Position embedding count: latent, proprio, torque, lidar (always 4)
+        # Position embedding count: latent, proprio, torque, lidar (always 4 for compatibility)
         self.additional_pos_embed = nn.Embedding(4, hidden_dim) # learned position embedding for latent, proprio, torque, and lidar
 
     def forward(self, qpos, image, env_state, actions=None, is_pad=None, qtor=None, lidar_scan=None):
@@ -114,18 +114,13 @@ class DETRVAE(nn.Module):
         if qtor is None:
             qtor = torch.zeros_like(qpos).to(qpos.device)
         
-        # Handle lidar_scan: always encode, fill with zeros if None
-        if self.lidar_encoder is not None:
-            if lidar_scan is not None:
-                # Encode LiDAR scan: (bs, num_beams) -> (bs, hidden_dim)
-                lidar_input = self.lidar_encoder(lidar_scan, training=is_training)  # (bs, hidden_dim)
-            else:
-                # Fill with zeros if lidar_scan is None, then encode
-                # Default to 1080 beams (common LiDAR size)
-                zero_lidar = torch.zeros((bs, 1080), dtype=torch.float32).to(qpos.device)
-                lidar_input = self.lidar_encoder(zero_lidar, training=is_training)  # (bs, hidden_dim)
+        # Handle lidar_scan: only encode if lidar_encoder is available and lidar_scan is provided
+        if self.lidar_encoder is not None and lidar_scan is not None:
+            # Encode LiDAR scan: (bs, num_beams) -> (bs, hidden_dim)
+            lidar_input = self.lidar_encoder(lidar_scan, training=is_training)  # (bs, hidden_dim)
         else:
-            # Fallback if LiDAREncoder is not available
+            # Use zero tensor directly if lidar is not used or not available
+            # This avoids encoding zero input which would produce a fixed embedding
             lidar_input = torch.zeros((bs, self.transformer.d_model), dtype=torch.float32).to(qpos.device)
         
         ### Obtain latent z from action sequence

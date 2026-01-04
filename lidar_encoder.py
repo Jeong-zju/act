@@ -258,7 +258,11 @@ class LiDAR1DCNNEncoder(nn.Module):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
             elif isinstance(m, nn.Linear):
-                nn.init.normal_(m.weight, 0, 0.01)
+                # Use Kaiming initialization for Linear layers (SiLU activation)
+                # This ensures proper scaling for the embedding output
+                nn.init.kaiming_normal_(m.weight, mode='fan_in', nonlinearity='relu')
+                # Alternative: Xavier initialization (works well with SiLU)
+                # nn.init.xavier_uniform_(m.weight, gain=1.0)
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0)
     

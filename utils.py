@@ -45,7 +45,7 @@ def pad_qpos(qpos, target_dim=17):
         return padded
 
 class EpisodicDataset(torch.utils.data.Dataset):
-    def __init__(self, episode_ids, dataset_dir, camera_names, norm_stats, use_qtor=False, use_lidar=False):
+    def __init__(self, episode_ids, dataset_dir, camera_names, norm_stats, use_qtor=False, use_lidar=False, mix=False, state_dim=17):
         super(EpisodicDataset).__init__()
         self.episode_ids = episode_ids
         self.dataset_dir = dataset_dir
@@ -53,6 +53,8 @@ class EpisodicDataset(torch.utils.data.Dataset):
         self.norm_stats = norm_stats
         self.use_qtor = use_qtor
         self.use_lidar = use_lidar
+        self.mix = mix
+        self.state_dim = state_dim
         self.is_sim = None
         self.__getitem__(0) # initialize self.is_sim
 
@@ -75,6 +77,10 @@ class EpisodicDataset(torch.utils.data.Dataset):
             # get observation at start_ts only
             qpos = root['/observations/qpos'][start_ts]
             qvel = root['/observations/qvel'][start_ts]
+            # Handle mix parameter: for state_dim==17 (mobile tasks)
+            # - If mix=True: replace first 3 values (base position) with qvel[:3] (base velocity)
+            # - If mix=False: set first 3 values to zeros (will be handled after padding)
+            # Note: For 14D qpos, padding will add zeros at the front anyway
             # Load qtor if available and use_qtor is True, otherwise use zeros
             if self.use_qtor and '/observations/qtor' in root:
                 qtor = root['/observations/qtor'][start_ts]
@@ -119,6 +125,18 @@ class EpisodicDataset(torch.utils.data.Dataset):
 
         # pad qpos if needed (14D -> 17D)
         qpos_data = pad_qpos(qpos_data, target_dim=17)
+        # Handle mix parameter for state_dim==17: set or replace first 3 values
+        if self.state_dim == 17:
+            if self.mix:
+                # Replace first 3 values (base position) with qvel[:3] (base velocity)
+                qvel_data = torch.from_numpy(qvel).float()
+                qvel_data = pad_qpos(qvel_data, target_dim=17)
+                qpos_data = qpos_data.clone()
+                qpos_data[..., :3] = qvel_data[..., :3]
+            else:
+                # Set first 3 values to zeros (ignore base position)
+                qpos_data = qpos_data.clone()
+                qpos_data[..., :3] = 0.0
         # pad qtor if needed (14D -> 17D)
         qtor_data = pad_qpos(qtor_data, target_dim=17)
         # pad action if needed (14D -> 17D)
@@ -137,7 +155,7 @@ class EpisodicDataset(torch.utils.data.Dataset):
         return image_data, qpos_data, qtor_data, lidar_scan_data, action_data, is_pad
 
 
-def get_norm_stats(dataset_dir, num_episodes):
+def get_norm_stats(dataset_dir, num_episodes, mix=False, use_qtor=False, state_dim=17):
     all_qpos_data = []
     all_qtor_data = []
     all_action_data = []
@@ -146,6 +164,10 @@ def get_norm_stats(dataset_dir, num_episodes):
         with h5py.File(dataset_path, 'r') as root:
             qpos = root['/observations/qpos'][()]
             qvel = root['/observations/qvel'][()]
+            # Handle mix parameter: for state_dim==17 (mobile tasks)
+            # - If mix=True: replace first 3 values (base position) with qvel[:3] (base velocity)
+            # - If mix=False: set first 3 values to zeros (will be handled after padding)
+            # Note: For 14D qpos, padding will add zeros at the front anyway
             if '/observations/qtor' in root:
                 qtor = root['/observations/qtor'][()]
             else:
@@ -166,6 +188,31 @@ def get_norm_stats(dataset_dir, num_episodes):
         pad_size = 17 - all_qpos_data.shape[-1]
         padding = torch.zeros(*all_qpos_data.shape[:-1], pad_size, dtype=all_qpos_data.dtype)
         all_qpos_data = torch.cat([padding, all_qpos_data], dim=-1)
+    
+    # Handle mix parameter for state_dim==17: set or replace first 3 values
+    if state_dim == 17:
+        if mix:
+            # Replace first 3 values (base position) with qvel[:3] (base velocity)
+            # Reload qvel data and pad it
+            all_qvel_data = []
+            for episode_idx in range(num_episodes):
+                dataset_path = os.path.join(dataset_dir, f'episode_{episode_idx}.hdf5')
+                with h5py.File(dataset_path, 'r') as root:
+                    qvel = root['/observations/qvel'][()]
+                all_qvel_data.append(torch.from_numpy(qvel))
+            all_qvel_data = torch.stack(all_qvel_data)
+            # Pad qvel if needed
+            if all_qvel_data.shape[-1] < 17:
+                pad_size = 17 - all_qvel_data.shape[-1]
+                padding = torch.zeros(*all_qvel_data.shape[:-1], pad_size, dtype=all_qvel_data.dtype)
+                all_qvel_data = torch.cat([padding, all_qvel_data], dim=-1)
+            # Replace first 3 dimensions
+            all_qpos_data = all_qpos_data.clone()
+            all_qpos_data[..., :3] = all_qvel_data[..., :3]
+        else:
+            # Set first 3 values to zeros (ignore base position)
+            all_qpos_data = all_qpos_data.clone()
+            all_qpos_data[..., :3] = 0.0
 
     # pad qtor data if needed (14D -> 17D)
     # Check the last dimension
@@ -186,17 +233,21 @@ def get_norm_stats(dataset_dir, num_episodes):
     # normalize action data
     action_mean = all_action_data.mean(dim=[0, 1], keepdim=True)
     action_std = all_action_data.std(dim=[0, 1], keepdim=True)
-    action_std = torch.clip(action_std, 1e-2, np.inf) # clipping
+    action_std = torch.clip(action_std, 1e-6, np.inf) # clipping
 
     # normalize qpos data
     qpos_mean = all_qpos_data.mean(dim=[0, 1], keepdim=True)
     qpos_std = all_qpos_data.std(dim=[0, 1], keepdim=True)
-    qpos_std = torch.clip(qpos_std, 1e-2, np.inf) # clipping
+    qpos_std = torch.clip(qpos_std, 1e-6, np.inf) # clipping
 
-    # normalize qtor data
-    qtor_mean = all_qtor_data.mean(dim=[0, 1], keepdim=True)
-    qtor_std = all_qtor_data.std(dim=[0, 1], keepdim=True)
-    qtor_std = torch.clip(qtor_std, 1e-2, np.inf) # clipping
+    if use_qtor:
+        # normalize qtor data
+        qtor_mean = all_qtor_data.mean(dim=[0, 1], keepdim=True)
+        qtor_std = all_qtor_data.std(dim=[0, 1], keepdim=True)
+        qtor_std = torch.clip(qtor_std, 1e-6, np.inf) # clipping
+    else:
+        qtor_mean = torch.zeros_like(qpos_mean)
+        qtor_std = torch.ones_like(qpos_std)
 
     # Pad example_qpos if needed
     example_qpos = qpos
@@ -214,7 +265,7 @@ def get_norm_stats(dataset_dir, num_episodes):
     return stats
 
 
-def load_data(dataset_dir, num_episodes, camera_names, batch_size_train, batch_size_val, use_qtor=False, use_lidar=False):
+def load_data(dataset_dir, num_episodes, camera_names, batch_size_train, batch_size_val, use_qtor=False, use_lidar=False, mix=False, state_dim=17):
     print(f'\nData from: {dataset_dir}\n')
     # obtain train test split
     train_ratio = 0.8
@@ -223,11 +274,11 @@ def load_data(dataset_dir, num_episodes, camera_names, batch_size_train, batch_s
     val_indices = shuffled_indices[int(train_ratio * num_episodes):]
 
     # obtain normalization stats for qpos and action
-    norm_stats = get_norm_stats(dataset_dir, num_episodes)
+    norm_stats = get_norm_stats(dataset_dir, num_episodes, mix=mix, use_qtor=use_qtor, state_dim=state_dim)
 
     # construct dataset and dataloader
-    train_dataset = EpisodicDataset(train_indices, dataset_dir, camera_names, norm_stats, use_qtor=use_qtor, use_lidar=use_lidar)
-    val_dataset = EpisodicDataset(val_indices, dataset_dir, camera_names, norm_stats, use_qtor=use_qtor, use_lidar=use_lidar)
+    train_dataset = EpisodicDataset(train_indices, dataset_dir, camera_names, norm_stats, use_qtor=use_qtor, use_lidar=use_lidar, mix=mix, state_dim=state_dim)
+    val_dataset = EpisodicDataset(val_indices, dataset_dir, camera_names, norm_stats, use_qtor=use_qtor, use_lidar=use_lidar, mix=mix, state_dim=state_dim)
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size_train, shuffle=True, pin_memory=True, num_workers=1, prefetch_factor=1)
     val_dataloader = DataLoader(val_dataset, batch_size=batch_size_val, shuffle=True, pin_memory=True, num_workers=1, prefetch_factor=1)
 
