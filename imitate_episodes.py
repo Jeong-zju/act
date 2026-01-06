@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 from copy import deepcopy
 from tqdm import tqdm
 from einops import rearrange
+import wandb
 
 from constants import DT
 from constants import PUPPET_GRIPPER_JOINT_OPEN
@@ -112,11 +113,25 @@ def main(args):
     train_dataloader, val_dataloader, stats, _ = load_data(dataset_dir, num_episodes, camera_names, batch_size_train, batch_size_val, use_qtor=use_qtor, use_lidar=use_lidar, mix=mix, state_dim=state_dim)
 
     # save dataset stats
-    if not os.path.isdir(ckpt_dir):
-        os.makedirs(ckpt_dir)
+    os.makedirs(ckpt_dir, exist_ok=True)
     stats_path = os.path.join(ckpt_dir, f'dataset_stats.pkl')
     with open(stats_path, 'wb') as f:
         pickle.dump(stats, f)
+
+    # Initialize wandb for training logging
+    # Note: wandb does not automatically upload checkpoints unless explicitly saved via wandb.save()
+    # Use the last folder name in ckpt_dir as the run name
+    run_name = os.path.basename(os.path.normpath(ckpt_dir))
+    wandb.init(
+        project="wholebody-teleop",
+        name=run_name,
+        config=config,
+        dir=ckpt_dir,  # Set wandb directory to checkpoint directory
+        settings=wandb.Settings(
+            _disable_stats=True,  # Disable system stats
+            _disable_meta=True,   # Disable metadata collection
+        )
+    )
 
     best_ckpt_info = train_bc(train_dataloader, val_dataloader, config)
     best_epoch, min_val_loss, best_state_dict = best_ckpt_info
@@ -125,6 +140,9 @@ def main(args):
     ckpt_path = os.path.join(ckpt_dir, f'policy_best.ckpt')
     torch.save(best_state_dict, ckpt_path)
     print(f'Best ckpt, val loss {min_val_loss:.6f} @ epoch{best_epoch}')
+    
+    # Finish wandb run
+    wandb.finish()
 
 
 def make_policy(policy_class, policy_config):
@@ -447,6 +465,9 @@ def train_bc(train_dataloader, val_dataloader, config):
     policy_class = config['policy_class']
     policy_config = config['policy_config']
 
+    # Ensure checkpoint directory exists
+    os.makedirs(ckpt_dir, exist_ok=True)
+
     set_seed(seed)
 
     policy = make_policy(policy_class, policy_config)
@@ -478,6 +499,12 @@ def train_bc(train_dataloader, val_dataloader, config):
         for k, v in epoch_summary.items():
             summary_string += f'{k}: {v.item():.3f} '
         # print(summary_string)
+        
+        # Log validation metrics to wandb
+        val_log_dict = {f'val/{k}': v.item() for k, v in epoch_summary.items()}
+        val_log_dict['val/best_loss'] = min_val_loss
+        val_log_dict['val/best_epoch'] = best_ckpt_info[0] if best_ckpt_info else epoch
+        wandb.log(val_log_dict, step=epoch)
 
         # training
         policy.train()
@@ -497,6 +524,10 @@ def train_bc(train_dataloader, val_dataloader, config):
         for k, v in epoch_summary.items():
             summary_string += f'{k}: {v.item():.3f} '
         # print(summary_string)
+        
+        # Log training metrics to wandb
+        train_log_dict = {f'train/{k}': v.item() for k, v in epoch_summary.items()}
+        wandb.log(train_log_dict, step=epoch)
 
         if epoch % 100 == 0:
             ckpt_path = os.path.join(ckpt_dir, f'policy_epoch_{epoch}_seed_{seed}.ckpt')
