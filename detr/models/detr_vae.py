@@ -160,6 +160,7 @@ class DETRVAE(nn.Module):
             all_cam_pos = []
             for cam_id, cam_name in enumerate(self.camera_names):
                 features, pos = self.backbones[0](image[:, cam_id]) # HARDCODED
+                # features, pos = self.backbones[cam_id](image[:, cam_id])
                 features = features[0] # take the last layer feature
                 pos = pos[0]
                 all_cam_features.append(self.input_proj(features))
@@ -281,6 +282,9 @@ def build(args):
     backbones = []
     backbone = build_backbone(args)
     backbones.append(backbone)
+    # for _ in args.camera_names:
+    #     backbone = build_backbone(args)
+    #     backbones.append(backbone)
 
     transformer = build_transformer(args)
 
